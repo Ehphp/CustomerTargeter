@@ -20,6 +20,8 @@ from .schema import EnrichedFacts, parse_enriched_facts
 
 logger = logging.getLogger(__name__)
 
+SEARCH_RADIUS_METERS = int(os.getenv("ENRICHMENT_SEARCH_RADIUS_M", "200"))
+
 
 POSTCODE_RE = re.compile(r"\b\d{4,5}\b")
 PROVINCE_CODE_RE = re.compile(r"\b[A-Z]{2}\b$")
@@ -218,6 +220,7 @@ class BusinessRow:
 
     def to_prompt_dict(self) -> dict[str, Any]:
         return {
+            "place_id": self.place_id,
             "name": self.name,
             "category": self.category,
             "address": self.resolved_address(),
@@ -231,6 +234,7 @@ class BusinessRow:
             "has_website": self.has_website,
             "latitude": self.latitude,
             "longitude": self.longitude,
+            "search_radius_m": SEARCH_RADIUS_METERS,
             "notes": (
                 f"Orario settimanale dichiarato: {self.hours_weekly} minuti"
                 if self.hours_weekly
@@ -244,9 +248,13 @@ class BusinessRow:
             self.name or "",
             self.resolved_address() or "",
             self.resolved_city() or "",
+            self.formatted_address or "",
             self.category or "",
             json.dumps(self.types or [], ensure_ascii=False, sort_keys=True),
             json.dumps(self.tags or {}, ensure_ascii=False, sort_keys=True),
+            str(self.latitude or ""),
+            str(self.longitude or ""),
+            str(SEARCH_RADIUS_METERS),
             str(version),
         ]
         digest = hashlib.sha256("|".join(raw).encode("utf-8")).hexdigest()
@@ -273,6 +281,7 @@ class BusinessRow:
             "osm_subtype": self.osm_subtype,
             "latitude": self.latitude,
             "longitude": self.longitude,
+            "search_radius_m": SEARCH_RADIUS_METERS,
         }
 
 
@@ -290,7 +299,7 @@ class EnrichmentRunner:
         self.client = client
         self.provider_name = provider_name or os.getenv("LLM_PROVIDER", "unknown")
         self.log = logger_ or logger
-        self.prompt_version = int(os.getenv("ENRICHMENT_PROMPT_VERSION", "1"))
+        self.prompt_version = int(os.getenv("ENRICHMENT_PROMPT_VERSION", "2"))
         self.rate_sleep = float(os.getenv("ENRICHMENT_REQUEST_DELAY", "1.0"))
 
     def run(self, *, limit: int, dry_run: bool = False, force: bool = False, ttl_days: int = 30) -> None:

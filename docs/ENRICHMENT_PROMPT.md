@@ -3,8 +3,8 @@
 ## Struttura del prompt inviato
 - Il prompt è costruito da `build_prompt` (`etl/enrich/prompts.py`) ogni volta che il runner deve arricchire un'attività.
 - Contiene un contesto iniziale che istruisce l'LLM a comportarsi come analista marketing locale e a produrre **solo** un JSON valido.
-- Sezione `Attivit??`: riporta `name`, `category`, `address`, `city`, coordinate lat/lon e ulteriori dettagli opzionali (indirizzo formattato, tipologia/subtype OSM, tags categoria, presenza di sito/telefono, CAP/provincia/regione dai tag, cucina dichiarata, brand, note dal dataset).
-- Regole operative: enumerano i campi richiesti (size, chain, budget, umbrella affinity ecc.), come trattare l'incertezza (`null` + abbassare `confidence`), e vincoli su formato e piattaforme social.
+- Sezione `Attività`: riporta `name`, `category`, `address`, `city`, coordinate lat/lon, bounding box e ulteriori dettagli opzionali (indirizzo formattato, tipologia/subtype OSM, tags categoria, presenza di sito/telefono, CAP/provincia/regione dai tag, cucina dichiarata, brand, note dal dataset, raggio stimato).
+- Regole operative: includono il vincolo sul raggio dalle coordinate (default 200 m, configurabile via `ENRICHMENT_SEARCH_RADIUS_M`), richiedono di motivare eventuali discrepanze in `provenance.reasoning`, di elencare fonti attendibili in `provenance.citations`, e ribadiscono i vincoli su campi e formato.
 - Chiusura con uno **schema esempio** (configurabile via `include_schema`) che offre all'LLM una traccia di output atteso; lo schema è serializzato in JSON con caratteri non ASCII abilitati per mantenere glifi italiani.
 
 ## Risposta attesa e parsing
@@ -23,6 +23,6 @@
    - Costruisce il prompt e chiama l'LLM (`LLMClient.complete`). Ritardi tra chiamate regolati da `ENRICHMENT_REQUEST_DELAY`.
    - Salva la risposta grezza e il JSON validato in `enrichment_response`; aggiorna `business_facts` con i valori arricchiti e metadati (`provider`, `source_model`, `confidence`).
 4. Lo script `feature_builder/build_metrics.py` usa `business_facts` per combinare i dati arricchiti con densità, zone e altri segnali, producendo `business_metrics` (size, budget, affinità, presenza digitale, ecc.).
-5. L'API FastAPI (`api/main.py`) espone gli score via `/places`, e la UI (`ui/src/App.tsx`) li rende filtrabili mostrando i badge delle metriche Brellé.
+5. L'API FastAPI (`api/main.py`) espone gli score via `/places`, e la UI (`ui/src/App.tsx`) li rende filtrabili mostrando i badge delle metriche Brellò.
 
 > Per verificare se il sistema chiama realmente GPT/Perplexity, controlla `LLM_PROVIDER` e le rispettive API key nel `.env`. Con un client attivo vedrai record in `enrichment_request/response` con `provider` valorizzato e log `Enrichment progress …` senza tag `[dry-run]`.

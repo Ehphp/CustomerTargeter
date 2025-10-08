@@ -256,13 +256,16 @@ def main() -> int:
                 logger.info("Remaining enrichment candidates after loop: %d", report.enrichment_candidates)
         else:
             logger.info("Skipping enrichment: data is within TTL.")
+            logger.info("Tip: usa --force-enrichment oppure abbassa ENRICHMENT_TTL_DAYS/--enrich-ttl-days per forzare un nuovo giro.")
 
         if should_run_metrics and not (args.metrics_each_batch and metrics_ran_during_batches):
             run_metrics_builder()
-        elif should_run_metrics:
-            logger.info("Metrics already executed during enrichment batches.")
         else:
-            logger.info("Skipping metrics builder: metrics already up to date.")
+            if args.metrics_each_batch and metrics_ran_during_batches:
+                logger.info("Metrics already executed during enrichment batches.")
+            else:
+                logger.info("Skipping metrics builder: metrics already up to date.")
+                logger.info("Tip: usa --always-run-metrics o --metrics-each-batch per forzarne l'esecuzione.")
     except subprocess.CalledProcessError as exc:
         logger.error("Command failed with exit code %s", exc.returncode)
         return exc.returncode

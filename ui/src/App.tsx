@@ -375,26 +375,90 @@ const Row: React.FC<RowProps> = ({ r, expanded, onToggle }) => {
 
   const prettyRawResponse = useMemo(() => {
     const raw = r.llm_raw_response;
+    const stringify = (value: unknown): string | null => {
+      try {
+        return JSON.stringify(value, null, 2);
+      } catch {
+        return null;
+      }
+    };
+
+    const tryParse = (input: string): string | null => {
+      try {
+        const parsed = JSON.parse(input);
+        if (typeof parsed === "string") {
+          const nested = tryParse(parsed);
+          return nested ?? parsed;
+        }
+        return stringify(parsed);
+      } catch {
+        return null;
+      }
+    };
+
+    const stripFence = (input: string): string => {
+      let out = input.trim();
+      if (out.startsWith("```")) {
+        out = out.replace(/^```(?:json)?/i, "").trim();
+        if (out.endsWith("```")) {
+          out = out.slice(0, -3).trim();
+        }
+      }
+      return out;
+    };
+
+    const decodeEscapes = (input: string): string => {
+      try {
+        const escaped = input
+          .replace(/\\/g, "\\\\")
+          .replace(/"/g, '\\"')
+          .replace(/\r?\n/g, "\\n");
+        return JSON.parse(`"${escaped}"`);
+      } catch {
+        return input;
+      }
+    };
+
     if (raw == null) {
       return null;
     }
+
     if (typeof raw === "string") {
-      const trimmed = raw.trim();
-      if (trimmed.length === 0) {
+      const cleaned = stripFence(raw);
+      if (!cleaned) {
         return null;
       }
-      try {
-        const parsed = JSON.parse(trimmed);
-        return JSON.stringify(parsed, null, 2);
-      } catch {
-        return trimmed;
+
+      let pretty = tryParse(cleaned);
+      if (pretty) {
+        return pretty;
       }
+
+      if (
+        (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+        (cleaned.startsWith("'") && cleaned.endsWith("'"))
+      ) {
+        const unwrapped = cleaned.slice(1, -1);
+        pretty = tryParse(unwrapped);
+        if (pretty) {
+          return pretty;
+        }
+      }
+
+      const decoded = decodeEscapes(cleaned);
+      if (decoded !== cleaned) {
+        const nested = tryParse(decoded);
+        if (nested) {
+          return nested;
+        }
+        return decoded;
+      }
+
+      return decodeEscapes(cleaned);
     }
-    try {
-      return JSON.stringify(raw, null, 2);
-    } catch {
-      return String(raw);
-    }
+
+    const asJson = stringify(raw);
+    return asJson ?? String(raw);
   }, [r.llm_raw_response]);
   const hasRawResponse = Boolean(prettyRawResponse && prettyRawResponse.trim().length > 0);
   const shouldRenderLowerGrid = Boolean(r.notes || provenanceReasoning || provenanceRest || hasRawResponse);

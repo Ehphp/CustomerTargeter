@@ -38,6 +38,7 @@ Esegue in sequenza gli step di `etl/sql_blocks/`:
 - Costruisce il prompt con `build_prompt` includendo:
   - Nome, categoria, tags OSM, flag phone/website.
   - Indirizzo/città risolti: combina `places_clean.address`, `formatted_address`, `tags addr:*` e, se serve, un fallback geospaziale su `istat_comuni`.
+  - Coordinate e bounding box (≈200 m, configurabili con ENRICHMENT_SEARCH_RADIUS_M) che devono essere rispettati: se la posizione trovata è fuori area il modello deve lasciare i campi a null e abbassare confidence, spiegando il motivo in provenance.reasoning.
 - Chiama l’LLM tramite `load_client_from_env` (`OpenAIChatClient` o `PerplexityClient`).
 - Valida l’output JSON con `EnrichedFacts` (`etl/enrich/schema.py`); se valido:
   - Aggiorna `enrichment_request`/`enrichment_response`.
@@ -75,6 +76,7 @@ Risultato finale in `business_metrics` (upsert con `ON CONFLICT`). Verifica: `SE
 - Lancia `python -m feature_builder.build_metrics` subito dopo l'enrichment (anche se non c'erano record mancanti puoi forzare con `--always-run-metrics`).
 - Usa `--dry-run` per vedere il report senza avviare i job; `--force-enrichment` ignora il TTL ma aggiorna comunque le metriche.
 - L'arricchimento viene eseguito a batch: `--enrich-limit` (o `AUTO_REFRESH_ENRICH_LIMIT`) definisce la dimensione di ogni chunk, che viene ripetuto finché restano candidati o fino a `AUTO_REFRESH_MAX_ENRICH_BATCHES`. Con `--metrics-each-batch` (o `AUTO_REFRESH_METRICS_EACH_BATCH=1`) il builder delle metriche parte dopo ogni batch invece di attendere la fine di tutto il giro.
+- Se auto_refresh segnala 'data is within TTL', usa --force-enrichment (o abbassa ENRICHMENT_TTL_DAYS/--enrich-ttl-days) per forzare un nuovo giro; --always-run-metrics e --metrics-each-batch forzano il calcolo delle metriche anche senza enrichment.
 
 ## 5. API FastAPI
 ```

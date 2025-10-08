@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from textwrap import dedent
 from typing import Any, Mapping, Optional
 
@@ -17,13 +18,20 @@ SCHEMA_EXAMPLE = {
     "ad_budget_band": "medio",
     "confidence": 0.72,
     "provenance": {
-        "reasoning": "Locale indipendente con forte presenza turistica."
+        "reasoning": "Locale indipendente con forte presenza turistica.",
+        "citations": [
+            "https://www.esempio.it"
+        ]
     },
 }
 
 
 def _format_optional_details(business: Mapping[str, Any]) -> str:
     details: list[str] = []
+    place_id = business.get("place_id")
+    if place_id:
+        details.append(f"- Identificativo interno: {place_id}")
+
     formatted_address = business.get("formatted_address")
     if formatted_address and formatted_address != business.get("address"):
         details.append(f"- Indirizzo formattato nel dataset: {formatted_address}")
@@ -32,6 +40,10 @@ def _format_optional_details(business: Mapping[str, Any]) -> str:
     lon = business.get("longitude")
     if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
         details.append(f"- Coordinate approssimative (WGS84): lat {lat:.5f}, lon {lon:.5f}")
+
+    radius = business.get("search_radius_m")
+    if isinstance(radius, (int, float)) and radius > 0:
+        details.append(f"- Raggio di ricerca previsto: ~{int(radius)} metri dalle coordinate.")
 
     osm_category = business.get("osm_category")
     osm_subtype = business.get("osm_subtype")
@@ -53,6 +65,22 @@ def _format_optional_details(business: Mapping[str, Any]) -> str:
 
     tags = business.get("tags")
     if isinstance(tags, dict):
+        street = tags.get("addr:street")
+        housenumber = tags.get("addr:housenumber")
+        if street or housenumber:
+            full = f"{street or ''} {housenumber or ''}".strip()
+            if full:
+                details.append(f"- Indirizzo OSM dettagliato: {full}")
+
+        locality_parts = [
+            tags.get("addr:neighbourhood"),
+            tags.get("addr:suburb"),
+            tags.get("addr:city"),
+        ]
+        locality = ", ".join(part for part in locality_parts if part)
+        if locality:
+            details.append(f"- Località dai tag OSM: {locality}")
+
         postcode = tags.get("addr:postcode")
         province = tags.get("addr:province") or tags.get("addr:state")
         region = tags.get("addr:region")
@@ -87,11 +115,25 @@ def build_prompt(business: Mapping[str, Any], include_schema: bool = True) -> st
     city = business.get("city") or ""
     lat = business.get("latitude")
     lon = business.get("longitude")
+    radius_val = business.get("search_radius_m")
+    radius = int(radius_val) if isinstance(radius_val, (int, float)) and radius_val > 0 else None
     coords_line = ""
+    bbox_line = ""
     if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-        coords_line = f"- Coordinate: lat {lat:.5f}, lon {lon:.5f}"
+        radius_hint = f" (raggio di ricerca ≈ {radius} m)" if radius else ""
+        coords_line = f"- Coordinate: lat {lat:.5f}, lon {lon:.5f}{radius_hint}"
+        if radius:
+            lat_delta = radius / 111_320
+            lon_factor = max(math.cos(math.radians(lat)), 0.05) * 111_320
+            lon_delta = radius / lon_factor if lon_factor else 0.0
+            bbox_line = (
+                f"- Bounding box approssimativo (+/-{radius} m): "
+                f"lat {lat - lat_delta:.5f} … {lat + lat_delta:.5f}, "
+                f"lon {lon - lon_delta:.5f} … {lon + lon_delta:.5f}"
+            )
     details = _format_optional_details(business)
-    details_block = f"{details}\n" if details else ""
+    details_block = "\n".join(filter(None, [details, bbox_line]))
+    details_block = f"{details_block}\n" if details_block else ""
 
     schema_block = json.dumps(SCHEMA_EXAMPLE, ensure_ascii=False, indent=2) if include_schema else "{}"
 
@@ -111,7 +153,9 @@ def build_prompt(business: Mapping[str, Any], include_schema: bool = True) -> st
         Regole:
         - Output: un unico JSON valido (nessun testo prima o dopo).
         - Se non sei certo di un dato, imposta null e riduci "confidence".
-        - Usa le coordinate WGS84 e gli indizi (CAP, provincia, regione) per validare il comune: se resti in dubbio lascia "city" a null e spiega la scelta in "provenance".
+        - Lavora SOLO su risultati entro il raggio indicato dalle coordinate: se le fonti portano fuori area o in un comune diverso, lascia i campi stimati a null, imposta "confidence" ≤ 0.25 e descrivi il problema in "provenance.reasoning".
+        - Confronta CAP, provincia e regione nei dettagli con le fonti trovate: eventuali discrepanze vanno motivate in "provenance.reasoning".
+        - Riporta le fonti principali (URL) in "provenance.citations" quando disponibili, privilegiando siti istituzionali o elenchi ufficiali italiani.
         - "size_class": micro, piccola, media o grande considerando il contesto italiano.
         - "umbrella_affinity": punteggio 0..1 su quanto un ombrello brandizzato Brellò è coerente con il target.
         - "ad_budget_band": stima prudente (basso, medio, alto) basata su categoria e dimensione.
