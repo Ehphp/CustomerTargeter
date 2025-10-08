@@ -1,0 +1,48 @@
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+.env
+.env.*
+!.env.example
+
+# Dependency caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# Application data and database dumps
+pgdata/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/
+
+# Logs
+*.log
+log/
+logs/
+
+# Front-end dependencies and build output
+node_modules/
+ui/node_modules/
+ui/dist/
+ui/dist-ssr/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
