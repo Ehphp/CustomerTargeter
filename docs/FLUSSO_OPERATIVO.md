@@ -74,6 +74,7 @@ Risultato finale in `business_metrics` (upsert con `ON CONFLICT`). Verifica: `SE
 - Interroga Postgres e manda al LLM solo i business privi di `business_facts` oppure con un `updated_at` oltre il TTL (a meno di usare `--force-enrichment`).
 - Lancia `python -m feature_builder.build_metrics` subito dopo l'enrichment (anche se non c'erano record mancanti puoi forzare con `--always-run-metrics`).
 - Usa `--dry-run` per vedere il report senza avviare i job; `--force-enrichment` ignora il TTL ma aggiorna comunque le metriche.
+- L'arricchimento viene eseguito a batch: `--enrich-limit` (o `AUTO_REFRESH_ENRICH_LIMIT`) definisce la dimensione di ogni chunk, che viene ripetuto finché restano candidati o fino a `AUTO_REFRESH_MAX_ENRICH_BATCHES`. Con `--metrics-each-batch` (o `AUTO_REFRESH_METRICS_EACH_BATCH=1`) il builder delle metriche parte dopo ogni batch invece di attendere la fine di tutto il giro.
 
 ## 5. API FastAPI
 ```

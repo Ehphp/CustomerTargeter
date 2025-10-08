@@ -29,6 +29,13 @@ def build_pg_config() -> dict[str, str]:
     }
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass
 class StalenessReport:
     enrichment_candidates: int
@@ -97,6 +104,55 @@ def run_metrics_builder() -> None:
     subprocess.run(cmd, check=True)
 
 
+def run_enrichment_batches(
+    pg: dict[str, str],
+    initial_report: StalenessReport,
+    ttl_days: int,
+    limit: int,
+    force: bool,
+    max_batches: int,
+    metrics_each_batch: bool,
+) -> tuple[StalenessReport, bool]:
+    remaining = initial_report.enrichment_candidates
+    batch = 0
+    metrics_ran = False
+    current_report = initial_report
+
+    while True:
+        if not force and remaining <= 0:
+            break
+        if max_batches and batch >= max_batches:
+            logger.info("Reached max enrichment batches (%d); stopping loop.", max_batches)
+            break
+
+        batch += 1
+        logger.info("=== Enrichment batch %d (limit=%d) ===", batch, limit)
+        run_enrichment(limit, ttl_days if not force else None, force)
+
+        if metrics_each_batch:
+            logger.info("Running metrics builder after batch %d", batch)
+            run_metrics_builder()
+            metrics_ran = True
+
+        with psycopg2.connect(**pg) as conn:
+            current_report = compute_staleness(conn, ttl_days)
+        remaining = current_report.enrichment_candidates
+        logger.info(
+            "Staleness after batch %d -> enrichment_candidates=%d, metrics_missing=%d, metrics_stale=%d",
+            batch,
+            current_report.enrichment_candidates,
+            current_report.metrics_missing,
+            current_report.metrics_stale,
+        )
+
+        if not force and remaining <= 0:
+            break
+        if force and remaining <= 0:
+            break
+
+    return current_report, metrics_ran
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run enrichment and metrics builders only when data is stale."
@@ -132,6 +188,18 @@ def parse_args() -> argparse.Namespace:
         "--log-level",
         default=os.getenv("AUTO_REFRESH_LOG_LEVEL", "INFO"),
         help="Logging level (DEBUG, INFO, ...).",
+    )
+    parser.add_argument(
+        "--max-enrich-batches",
+        type=int,
+        default=int(os.getenv("AUTO_REFRESH_MAX_ENRICH_BATCHES", "0")),
+        help="Numero massimo di batch consecutivi di enrichment da eseguire (0 = finché ci sono candidati).",
+    )
+    parser.add_argument(
+        "--metrics-each-batch",
+        action="store_true",
+        default=_env_flag("AUTO_REFRESH_METRICS_EACH_BATCH"),
+        help="Esegue il calcolo delle metriche dopo ogni batch di enrichment.",
     )
     return parser.parse_args()
 
@@ -173,13 +241,26 @@ def main() -> int:
         return 0
 
     try:
+        metrics_ran_during_batches = False
         if should_run_enrichment:
-            run_enrichment(args.enrich_limit, ttl_days if not args.force_enrichment else None, args.force_enrichment)
+            report, metrics_ran_during_batches = run_enrichment_batches(
+                pg=pg,
+                initial_report=report,
+                ttl_days=ttl_days,
+                limit=args.enrich_limit,
+                force=args.force_enrichment,
+                max_batches=args.max_enrich_batches,
+                metrics_each_batch=args.metrics_each_batch,
+            )
+            if not args.force_enrichment:
+                logger.info("Remaining enrichment candidates after loop: %d", report.enrichment_candidates)
         else:
             logger.info("Skipping enrichment: data is within TTL.")
 
-        if should_run_metrics:
+        if should_run_metrics and not (args.metrics_each_batch and metrics_ran_during_batches):
             run_metrics_builder()
+        elif should_run_metrics:
+            logger.info("Metrics already executed during enrichment batches.")
         else:
             logger.info("Skipping metrics builder: metrics already up to date.")
     except subprocess.CalledProcessError as exc:

@@ -222,12 +222,15 @@ class BusinessRow:
             "category": self.category,
             "address": self.resolved_address(),
             "city": self.resolved_city(),
+            "formatted_address": self.formatted_address,
             "types": self.types,
             "tags": self.tags,
             "osm_category": self.osm_category,
             "osm_subtype": self.osm_subtype,
             "has_phone": self.has_phone,
             "has_website": self.has_website,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
             "notes": (
                 f"Orario settimanale dichiarato: {self.hours_weekly} minuti"
                 if self.hours_weekly
@@ -268,6 +271,8 @@ class BusinessRow:
             "opening_hours": self.opening_hours_json,
             "osm_category": self.osm_category,
             "osm_subtype": self.osm_subtype,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
         }
 
 

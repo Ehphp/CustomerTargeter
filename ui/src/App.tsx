@@ -33,6 +33,7 @@ type PlaceRow = {
   facts_updated_at?: string | null;
   source_provider?: string | null;
   source_model?: string | null;
+  llm_raw_response?: unknown;
 };
 
 type SortColumn =
@@ -76,6 +77,7 @@ type JobState = {
 type ETLStatus = {
   overpass: JobState;
   pipeline: JobState;
+  auto_refresh?: JobState;
 };
 
 const DEFAULT_SORT_DIRECTION: Record<SortColumn, SortState["direction"]> = {
@@ -85,6 +87,13 @@ const DEFAULT_SORT_DIRECTION: Record<SortColumn, SortState["direction"]> = {
   umbrella_affinity: "desc",
   digital_presence: "desc",
   sector_density_score: "desc",
+};
+
+const JOB_KEYS = ["overpass", "pipeline", "auto_refresh"] as const;
+const JOB_LABEL: Record<typeof JOB_KEYS[number], string> = {
+  overpass: "Overpass",
+  pipeline: "Pipeline",
+  auto_refresh: "Auto Refresh",
 };
 
 function compareStrings(
@@ -155,12 +164,6 @@ function clamp01(value: number | null | undefined): number | null {
   return Math.min(1, Math.max(0, value));
 }
 
-function formatPercent(value: number | null | undefined): string {
-  const pct = clamp01(value);
-  if (pct == null) return "-";
-  return `${Math.round(pct * 100)}%`;
-}
-
 function humanizeLabel(label: string | null | undefined): string {
   if (!label) return "-";
   const normalized = label.replace(/_/g, " ").trim();
@@ -210,18 +213,76 @@ const ConfidencePill: React.FC<{ value?: number | null }> = ({ value }) => {
   );
 };
 
-type DetailEntry = { label: string; value: React.ReactNode };
+type DetailEntry = { label: string; value: React.ReactNode; isAi?: boolean };
+
+const AiBadge: React.FC<{ size?: "xs" | "sm" }> = ({ size = "sm" }) => {
+  const sizing =
+    size === "xs"
+      ? "px-2 py-0 text-[0.58rem]"
+      : "px-2.5 py-0.5 text-[0.65rem]";
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center rounded-full border border-violet-200 bg-violet-50 font-semibold uppercase tracking-[0.18em] text-violet-700 whitespace-nowrap ${sizing}`}
+    >
+      AI
+    </span>
+  );
+};
 
 const DetailList: React.FC<{ entries: DetailEntry[] }> = ({ entries }) => (
-  <dl className="space-y-1.5">
-    {entries.map((entry, idx) => (
-      <div key={`${entry.label}-${idx}`} className="flex gap-3">
-        <dt className="w-36 shrink-0 text-xs uppercase tracking-wide text-slate-500">{entry.label}</dt>
-        <dd className="text-sm text-slate-700 break-words">{entry.value ?? "-"}</dd>
-      </div>
-    ))}
+  <dl className="grid grid-cols-1 gap-y-3 text-sm">
+    {entries.map((entry, idx) => {
+      const rawValue = entry.value ?? "-";
+      const isPlainText =
+        typeof rawValue === "string" ||
+        typeof rawValue === "number" ||
+        typeof rawValue === "boolean";
+      const labelHasLlm = /llm/i.test(entry.label);
+      const valueHasLlm = typeof rawValue === "string" && /llm/i.test(rawValue);
+      const showAi = entry.isAi ?? (labelHasLlm || valueHasLlm);
+      const displayValue = isPlainText ? (
+        <span className="font-semibold text-slate-900 leading-snug">{rawValue}</span>
+      ) : (
+        rawValue
+      );
+      return (
+        <div
+          key={`${entry.label}-${idx}`}
+          className="flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-4"
+        >
+          <dt className="text-left text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-slate-500 sm:w-48 sm:flex-shrink-0">
+            {entry.label}
+          </dt>
+          <dd className="min-w-0 flex-1 break-words text-left text-slate-700 leading-snug">
+            <div className={`flex ${isPlainText ? "items-center" : "items-start"} gap-2`}>
+              <div className={`${isPlainText ? "" : "min-w-0"} flex-1`}>{displayValue}</div>
+              {showAi && <AiBadge size="xs" />}
+            </div>
+          </dd>
+        </div>
+      );
+    })}
   </dl>
 );
+
+const MetricBar: React.FC<{ value?: number | null }> = ({ value }) => {
+  const pct = clamp01(value);
+  if (pct == null) {
+    return <span className="text-slate-400 font-medium">-</span>;
+  }
+  const percent = Math.round(pct * 100);
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-sm font-semibold text-slate-900">{percent}%</span>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+        <span
+          className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-sky-400 via-indigo-500 to-indigo-600"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+    </div>
+  );
+};
 
 type RowProps = {
   r: PlaceRow;
@@ -232,6 +293,112 @@ type RowProps = {
 const Row: React.FC<RowProps> = ({ r, expanded, onToggle }) => {
   const confidence = r.facts_confidence_override ?? r.facts_confidence ?? r.digital_presence_confidence;
   const detailId = `details-${sanitizeId(r.place_id)}`;
+
+  let provenanceReasoning: string | null = null;
+  let provenanceRest: Record<string, unknown> | null = null;
+  if (r.provenance && typeof r.provenance === "object" && !Array.isArray(r.provenance)) {
+    const rest: Record<string, unknown> = {};
+    Object.entries(r.provenance).forEach(([key, value]) => {
+      if (key === "reasoning" && typeof value === "string" && value.trim().length > 0) {
+        provenanceReasoning = value.trim();
+      } else {
+        rest[key] = value;
+      }
+    });
+    if (Object.keys(rest).length > 0) {
+      provenanceRest = rest;
+    }
+  }
+
+  const aiHints = new Set<string>();
+  if (provenanceRest) {
+    Object.entries(provenanceRest).forEach(([key, value]) => {
+      if (typeof value === "string" && value.toLowerCase().includes("llm")) {
+        aiHints.add(key.toLowerCase());
+      }
+    });
+  }
+  if (typeof r.budget_source === "string" && r.budget_source.toLowerCase().includes("llm")) {
+    aiHints.add("budget");
+  }
+
+  const sizeAi =
+    aiHints.has("size_class_source") ||
+    aiHints.has("size_class") ||
+    aiHints.has("dimensione");
+  const chainAi = aiHints.has("is_chain_source") || aiHints.has("is_chain");
+  const budgetAi = aiHints.has("budget") || aiHints.has("ad_budget_band");
+
+  const highlightChips = [
+    r.size_class && {
+      key: "size",
+      label: "Dimensione",
+      value: r.size_class,
+      className: "border-slate-200 bg-slate-100 text-slate-700",
+      isAi: sizeAi,
+    },
+    typeof r.is_chain === "boolean" && {
+      key: "chain",
+      label: "Formato",
+      value: r.is_chain ? "Catena" : "Indipendente",
+      className: r.is_chain
+        ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+        : "border-emerald-200 bg-emerald-50 text-emerald-700",
+      isAi: chainAi,
+    },
+    r.ad_budget_band && {
+      key: "budget",
+      label: "Budget",
+      value: r.ad_budget_band,
+      className:
+        r.ad_budget_band.toLowerCase() === "alto"
+          ? "border-amber-200 bg-amber-50 text-amber-700"
+          : r.ad_budget_band.toLowerCase() === "medio"
+            ? "border-sky-200 bg-sky-50 text-sky-700"
+            : "border-slate-200 bg-slate-50 text-slate-700",
+      isAi: budgetAi,
+    },
+    r.geo_distribution_label && {
+      key: "geo",
+      label: "Geo area",
+      value: humanizeLabel(r.geo_distribution_label),
+      className: "border-blue-200 bg-blue-50 text-blue-700",
+      isAi: aiHints.has("geo_distribution_source"),
+    },
+  ].filter(Boolean) as Array<{
+    key: string;
+    label: string;
+    value: React.ReactNode;
+    className: string;
+    isAi?: boolean;
+  }>;
+
+  const prettyRawResponse = useMemo(() => {
+    const raw = r.llm_raw_response;
+    if (raw == null) {
+      return null;
+    }
+    if (typeof raw === "string") {
+      const trimmed = raw.trim();
+      if (trimmed.length === 0) {
+        return null;
+      }
+      try {
+        const parsed = JSON.parse(trimmed);
+        return JSON.stringify(parsed, null, 2);
+      } catch {
+        return trimmed;
+      }
+    }
+    try {
+      return JSON.stringify(raw, null, 2);
+    } catch {
+      return String(raw);
+    }
+  }, [r.llm_raw_response]);
+  const hasRawResponse = Boolean(prettyRawResponse && prettyRawResponse.trim().length > 0);
+  const shouldRenderLowerGrid = Boolean(r.notes || provenanceReasoning || provenanceRest || hasRawResponse);
+
   return (
     <>
       <tr className="border-b hover:bg-slate-50 transition">
@@ -289,102 +456,182 @@ const Row: React.FC<RowProps> = ({ r, expanded, onToggle }) => {
         </td>
       </tr>
       {expanded && (
-        <tr className="border-b bg-slate-50">
-          <td colSpan={7} className="px-4 pb-5 pt-0 text-sm text-slate-600">
+        <tr className="border-b">
+          <td colSpan={7} className="px-4 pb-6 pt-0">
             <div id={detailId} className="pt-4">
-              <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-                <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Profilo & Budget</h4>
-                  <div className="mt-2">
-                    <DetailList
-                      entries={[
-                        { label: "Dimensione", value: r.size_class ?? "-" },
-                        {
-                          label: "Catena",
-                          value: typeof r.is_chain === "boolean" ? (r.is_chain ? "Catena" : "Indipendente") : "-",
-                        },
-                        { label: "Budget", value: r.ad_budget_band ?? "-" },
-                        { label: "Fonte budget", value: r.budget_source ?? "-" },
-                        { label: "Marketing (metriche)", value: formatPercent(r.marketing_attitude) },
-                        { label: "Marketing (LLM)", value: formatPercent(r.facts_marketing_attitude) },
-                        { label: "Affinita (LLM)", value: formatPercent(r.facts_umbrella_affinity) },
-                      ]}
-                    />
+              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex flex-col gap-6 p-4 md:p-6">
+                  {highlightChips.length > 0 && (
+                    <>
+                      <div className="flex flex-wrap gap-2 text-xs font-semibold">
+                        {highlightChips.map((chip) => (
+                          <span
+                            key={chip.key}
+                            className={`inline-flex max-w-full flex-wrap items-center gap-1 rounded-full border px-3 py-1 ${chip.className}`}
+                            title={String(chip.value)}
+                          >
+                            <span className="text-[0.65rem] uppercase tracking-[0.2em] text-slate-500">
+                              {chip.label}
+                            </span>
+                            <span className="text-sm font-semibold text-slate-900 break-words leading-tight">
+                              {chip.value}
+                            </span>
+                            {chip.isAi && <AiBadge size="xs" />}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="h-px w-full bg-slate-100" />
+                    </>
+                  )}
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <section className="rounded-2xl border border-slate-100 bg-slate-50/60 p-4 shadow-inner">
+                      <h4 className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Profilo & Budget
+                      </h4>
+                      <div className="mt-3">
+                        <DetailList
+                          entries={[
+                            {
+                              label: "Fonte budget",
+                              value: r.budget_source ?? "-",
+                              isAi: /llm/i.test(r.budget_source ?? ""),
+                            },
+                            { label: "Marketing (metriche)", value: <MetricBar value={r.marketing_attitude} /> },
+                            {
+                              label: "Marketing (LLM)",
+                              value: <MetricBar value={r.facts_marketing_attitude} />,
+                              isAi: true,
+                            },
+                            {
+                              label: "Affinita (LLM)",
+                              value: <MetricBar value={r.facts_umbrella_affinity} />,
+                              isAi: true,
+                            },
+                          ]}
+                        />
+                      </div>
+                    </section>
+                    <section className="rounded-2xl border border-slate-100 bg-slate-50/60 p-4 shadow-inner">
+                      <h4 className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Digitale & Territorio
+                      </h4>
+                      <div className="mt-3">
+                        <DetailList
+                          entries={[
+                            { label: "Presenza digitale", value: <MetricBar value={r.digital_presence} /> },
+                            { label: "Confidenza digitale", value: <MetricBar value={r.digital_presence_confidence} /> },
+                            { label: "Geo area", value: humanizeLabel(r.geo_distribution_label) },
+                            { label: "Fonte geo", value: r.geo_distribution_source ?? "-" },
+                            { label: "Densita settore", value: <MetricBar value={r.sector_density_score} /> },
+                            { label: "N. vicini", value: r.sector_density_neighbors ?? "-" },
+                            { label: "Ultimo aggiornamento metriche", value: formatDate(r.metrics_updated_at) },
+                          ]}
+                        />
+                      </div>
+                    </section>
                   </div>
-                </div>
-                <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Digitale & Territorio
-                  </h4>
-                  <div className="mt-2">
-                    <DetailList
-                      entries={[
-                        { label: "Presenza digitale", value: formatPercent(r.digital_presence) },
-                        { label: "Confidenza digitale", value: formatPercent(r.digital_presence_confidence) },
-                        { label: "Geo area", value: humanizeLabel(r.geo_distribution_label) },
-                        { label: "Fonte geo", value: r.geo_distribution_source ?? "-" },
-                        { label: "Densita settore", value: formatPercent(r.sector_density_score) },
-                        { label: "N. vicini", value: r.sector_density_neighbors ?? "-" },
-                        { label: "Ultimo aggiornamento metriche", value: formatDate(r.metrics_updated_at) },
-                      ]}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Fonti & Note</h4>
-                  <div className="mt-2 space-y-2">
-                    <DetailList
-                      entries={[
-                        {
-                          label: "Website",
-                          value: r.website_url ? (
-                            <a
-                              href={r.website_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-blue-600 hover:underline"
-                            >
-                              {r.website_url}
-                            </a>
-                          ) : (
-                            "-"
-                          ),
-                        },
-                        {
-                          label: "Social",
-                          value:
-                            r.social && Object.keys(r.social).length > 0 ? (
-                              <ul className="space-y-1">
-                                {Object.entries(r.social).map(([network, url]) => (
-                                  <li key={network}>
-                                    <a
-                                      className="text-blue-600 hover:underline"
-                                      href={url}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                    >
-                                      {network}: {url}
-                                    </a>
-                                  </li>
-                                ))}
-                              </ul>
+                  <section className="rounded-2xl border border-slate-100 bg-slate-50/60 p-4 shadow-inner">
+                    <h4 className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Fonti & Note
+                    </h4>
+                    <div className="mt-3">
+                      <DetailList
+                        entries={[
+                          {
+                            label: "Website",
+                            value: r.website_url ? (
+                              <a
+                                href={r.website_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="break-words text-blue-600 hover:text-blue-700 hover:underline"
+                              >
+                                {r.website_url}
+                              </a>
                             ) : (
                               "-"
                             ),
-                        },
-                        { label: "Confidenza LLM", value: formatPercent(confidence) },
-                        { label: "Fonte LLM", value: r.source_provider ?? "-" },
-                        { label: "Modello", value: r.source_model ?? "-" },
-                        { label: "Aggiornamento LLM", value: formatDate(r.facts_updated_at) },
-                      ]}
-                    />
-                    {r.notes && <p className="text-sm text-slate-700">{r.notes}</p>}
-                    {r.provenance && (
-                      <pre className="whitespace-pre-wrap rounded bg-white/80 p-3 text-xs text-slate-600 shadow-inner">
-                        {JSON.stringify(r.provenance, null, 2)}
-                      </pre>
-                    )}
-                  </div>
+                          },
+                          {
+                            label: "Social",
+                            value:
+                              r.social && Object.keys(r.social).length > 0 ? (
+                                <ul className="space-y-2 text-slate-700">
+                                  {Object.entries(r.social).map(([network, url]) => (
+                                    <li key={network} className="space-y-1">
+                                      <span className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                        {network}
+                                      </span>
+                                      <div className="break-words">
+                                        <a
+                                          className="break-words text-blue-600 hover:text-blue-700 hover:underline"
+                                          href={url}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                        >
+                                          {url}
+                                        </a>
+                                      </div>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                "-"
+                              ),
+                            isAi: true,
+                          },
+                          {
+                            label: "Confidenza LLM",
+                            value: confidence != null ? <ConfidencePill value={confidence} /> : "-",
+                            isAi: true,
+                          },
+                          { label: "Fonte LLM", value: r.source_provider ?? "-", isAi: true },
+                          { label: "Modello", value: r.source_model ?? "-", isAi: true },
+                          { label: "Aggiornamento LLM", value: formatDate(r.facts_updated_at), isAi: true },
+                        ]}
+                      />
+                    </div>
+                  </section>
+                  {shouldRenderLowerGrid && (
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                      {r.notes && (
+                        <div className="rounded-xl bg-slate-50 p-4 text-sm leading-relaxed text-slate-700">
+                          <h5 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Note</h5>
+                          <p className="mt-2">{r.notes}</p>
+                        </div>
+                      )}
+                      {(provenanceReasoning || provenanceRest) && (
+                        <div className="rounded-xl border border-slate-100 bg-slate-900/5 p-4 text-xs text-slate-600">
+                          <h5 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Provenienza LLM
+                          </h5>
+                          {provenanceReasoning && (
+                            <blockquote className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm leading-relaxed text-slate-700 shadow-sm">
+                              <span className="block text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                                Reasoning
+                              </span>
+                              <span className="mt-1 block leading-relaxed">{provenanceReasoning}</span>
+                            </blockquote>
+                          )}
+                          {provenanceRest && (
+                            <pre className="mt-3 whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-white p-3 leading-relaxed text-slate-600">
+                              {JSON.stringify(provenanceRest, null, 2)}
+                            </pre>
+                          )}
+                        </div>
+                      )}
+                      {hasRawResponse && prettyRawResponse && (
+                        <div className="rounded-xl border border-slate-100 bg-white p-4 text-xs text-slate-700 shadow-inner md:col-span-2 lg:col-span-1">
+                          <h5 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Response LLM (raw)
+                          </h5>
+                          <pre className="mt-2 max-h-96 min-h-[200px] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-900/5 p-3 font-mono text-[0.7rem] leading-relaxed text-slate-700">
+                            {prettyRawResponse}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -497,7 +744,8 @@ export default function App() {
       setEtl(data);
       if (
         data.pipeline?.status === "ok" ||
-        data.overpass?.status === "ok"
+        data.overpass?.status === "ok" ||
+        data.auto_refresh?.status === "ok"
       ) {
         fetchCounts();
       }
@@ -525,6 +773,17 @@ export default function App() {
       startPolling();
     } catch (e) {
       alert(`Pipeline: ${String(e)}`);
+    }
+  }
+
+  async function startAutoRefresh() {
+    try {
+      const r = await fetch(`${apiBase}/automation/auto_refresh/start`, { method: "POST" });
+      if (!r.ok) throw new Error(await r.text());
+      await fetchEtlStatus();
+      startPolling();
+    } catch (e) {
+      alert(`Auto Refresh: ${String(e)}`);
     }
   }
 
@@ -580,7 +839,7 @@ export default function App() {
   }, [apiBase]);
 
   useEffect(() => {
-    const anyRunning = etl?.overpass?.status === "running" || etl?.pipeline?.status === "running";
+    const anyRunning = JOB_KEYS.some((k) => etl?.[k]?.status === "running");
     if (anyRunning) startPolling(); else stopPolling();
     return () => stopPolling();
   }, [etl]);
@@ -760,6 +1019,14 @@ export default function App() {
               Run Pipeline
             </button>
             <button
+              onClick={startAutoRefresh}
+              className="ui-btn ui-btn-ghost"
+              disabled={etl?.auto_refresh?.status === "running"}
+              title="Esegue arricchimento LLM e ricalcolo metriche"
+            >
+              Run Auto Refresh
+            </button>
+            <button
               onClick={() => fetchEtlStatus()}
               className="ui-btn ui-btn-ghost"
             >
@@ -771,31 +1038,35 @@ export default function App() {
         {etl && (
           <section className="mb-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {(["overpass", "pipeline"] as const).map((k) => (
-                <div key={k} className="border rounded-xl p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="font-semibold capitalize">{k}</h3>
-                    <span className={`text-xs px-2 py-1 rounded-full ${
-                      etl[k].status === "running" ? "bg-amber-100 text-amber-700" :
-                      etl[k].status === "ok" ? "bg-emerald-100 text-emerald-700" :
-                      etl[k].status === "error" ? "bg-rose-100 text-rose-700" :
-                      "bg-slate-100 text-slate-700"
-                    }`}>
-                      {etl[k].status}
-                    </span>
+              {JOB_KEYS.map((k) => {
+                const job = etl[k];
+                if (!job) return null;
+                return (
+                  <div key={k} className="border rounded-xl p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="font-semibold">{JOB_LABEL[k]}</h3>
+                      <span className={`text-xs px-2 py-1 rounded-full ${
+                        job.status === "running" ? "bg-amber-100 text-amber-700" :
+                        job.status === "ok" ? "bg-emerald-100 text-emerald-700" :
+                        job.status === "error" ? "bg-rose-100 text-rose-700" :
+                        "bg-slate-100 text-slate-700"
+                      }`}>
+                        {job.status}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-600 mb-2">
+                      <div>started: {job.started_at ?? "-"}</div>
+                      <div>ended: {job.ended_at ?? "-"}</div>
+                      {typeof job.last_rc === "number" && <div>rc: {job.last_rc}</div>}
+                    </div>
+                    {job.last_lines && job.last_lines.length > 0 && (
+                      <pre className="text-xs bg-slate-50 border rounded p-2 max-h-48 overflow-auto">
+                        {job.last_lines.slice(-20).join("\n")}
+                      </pre>
+                    )}
                   </div>
-                  <div className="text-xs text-slate-600 mb-2">
-                    <div>started: {etl[k].started_at ?? "-"}</div>
-                    <div>ended: {etl[k].ended_at ?? "-"}</div>
-                    {typeof etl[k].last_rc === "number" && <div>rc: {etl[k].last_rc}</div>}
-                  </div>
-                  {etl[k].last_lines && etl[k].last_lines.length > 0 && (
-                    <pre className="text-xs bg-slate-50 border rounded p-2 max-h-48 overflow-auto">
-                      {etl[k].last_lines.slice(-20).join("\n")}
-                    </pre>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </section>
         )}

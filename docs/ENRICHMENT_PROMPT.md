@@ -3,7 +3,7 @@
 ## Struttura del prompt inviato
 - Il prompt è costruito da `build_prompt` (`etl/enrich/prompts.py`) ogni volta che il runner deve arricchire un'attività.
 - Contiene un contesto iniziale che istruisce l'LLM a comportarsi come analista marketing locale e a produrre **solo** un JSON valido.
-- Sezione `Attività`: riporta `name`, `category`, `address`, `city` più eventuali dettagli opzionali (tipologia/subtype OSM, tags categoria, presenza di sito/telefono, cucina dichiarata, brand, note dal dataset).
+- Sezione `Attivit??`: riporta `name`, `category`, `address`, `city`, coordinate lat/lon e ulteriori dettagli opzionali (indirizzo formattato, tipologia/subtype OSM, tags categoria, presenza di sito/telefono, CAP/provincia/regione dai tag, cucina dichiarata, brand, note dal dataset).
 - Regole operative: enumerano i campi richiesti (size, chain, budget, umbrella affinity ecc.), come trattare l'incertezza (`null` + abbassare `confidence`), e vincoli su formato e piattaforme social.
 - Chiusura con uno **schema esempio** (configurabile via `include_schema`) che offre all'LLM una traccia di output atteso; lo schema è serializzato in JSON con caratteri non ASCII abilitati per mantenere glifi italiani.
 

@@ -103,7 +103,7 @@ class PerplexityClient(LLMClient):
     def __init__(
         self,
         api_key: str,
-        model: str = "llama-3.1-sonar-small-128k-chat",
+        model: str = "sonar",
         endpoint: str = "https://api.perplexity.ai/chat/completions",
         system_prompt: str | None = None,
         timeout: int = 60,
@@ -187,7 +187,7 @@ def load_client_from_env(logger_: logging.Logger | None = None) -> LLMClient | N
         api_key = os.getenv("PERPLEXITY_API_KEY")
         if not api_key:
             raise ValueError("PERPLEXITY_API_KEY is required when LLM_PROVIDER=perplexity")
-        model = os.getenv("LLM_MODEL") or "llama-3.1-sonar-small-128k-chat"
+        model = os.getenv("LLM_MODEL") or "sonar"
         return PerplexityClient(api_key=api_key, model=model)
 
     raise ValueError(f"Unsupported LLM_PROVIDER '{provider}'")

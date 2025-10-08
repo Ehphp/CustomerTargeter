@@ -24,6 +24,15 @@ SCHEMA_EXAMPLE = {
 
 def _format_optional_details(business: Mapping[str, Any]) -> str:
     details: list[str] = []
+    formatted_address = business.get("formatted_address")
+    if formatted_address and formatted_address != business.get("address"):
+        details.append(f"- Indirizzo formattato nel dataset: {formatted_address}")
+
+    lat = business.get("latitude")
+    lon = business.get("longitude")
+    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+        details.append(f"- Coordinate approssimative (WGS84): lat {lat:.5f}, lon {lon:.5f}")
+
     osm_category = business.get("osm_category")
     osm_subtype = business.get("osm_subtype")
     if osm_subtype and osm_subtype != osm_category:
@@ -44,6 +53,15 @@ def _format_optional_details(business: Mapping[str, Any]) -> str:
 
     tags = business.get("tags")
     if isinstance(tags, dict):
+        postcode = tags.get("addr:postcode")
+        province = tags.get("addr:province") or tags.get("addr:state")
+        region = tags.get("addr:region")
+        if postcode:
+            details.append(f"- CAP indicato: {postcode}")
+        if province:
+            details.append(f"- Provincia indicata: {province}")
+        if region:
+            details.append(f"- Regione indicata: {region}")
         cuisine = tags.get("cuisine")
         if cuisine:
             details.append(f"- Cucina dichiarata: {cuisine}")
@@ -67,6 +85,11 @@ def build_prompt(business: Mapping[str, Any], include_schema: bool = True) -> st
     category = business.get("category") or "attività generica"
     address = business.get("address") or ""
     city = business.get("city") or ""
+    lat = business.get("latitude")
+    lon = business.get("longitude")
+    coords_line = ""
+    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+        coords_line = f"- Coordinate: lat {lat:.5f}, lon {lon:.5f}"
     details = _format_optional_details(business)
     details_block = f"{details}\n" if details else ""
 
@@ -82,11 +105,13 @@ def build_prompt(business: Mapping[str, Any], include_schema: bool = True) -> st
         - Categoria: {category}
         - Indirizzo: {address}
         - Città: {city}
+        {coords_line}
         {details_block}
 
         Regole:
         - Output: un unico JSON valido (nessun testo prima o dopo).
         - Se non sei certo di un dato, imposta null e riduci "confidence".
+        - Usa le coordinate WGS84 e gli indizi (CAP, provincia, regione) per validare il comune: se resti in dubbio lascia "city" a null e spiega la scelta in "provenance".
         - "size_class": micro, piccola, media o grande considerando il contesto italiano.
         - "umbrella_affinity": punteggio 0..1 su quanto un ombrello brandizzato Brellò è coerente con il target.
         - "ad_budget_band": stima prudente (basso, medio, alto) basata su categoria e dimensione.

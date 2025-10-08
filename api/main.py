@@ -24,15 +24,20 @@ def q(sql, params=()):
 
 app = FastAPI()
 
-origins = [
+_default_cors_origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:5175",
+    "http://127.0.0.1:5175",
 ]
+_raw_origins = os.getenv("API_CORS_ORIGINS")
+_cors_origins = [origin.strip() for origin in _raw_origins.split(",") if origin.strip()] if _raw_origins else _default_cors_origins
+
 app.add_middleware(
     CORSMiddleware,
-    # In DEV: accetta localhost e 127.0.0.1 su QUALSIASI porta
-    allow_origins=[],  # lasciato vuoto perché usiamo la regex
-    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -73,6 +78,13 @@ RUNS = {
         "last_lines": [],
     },
     "pipeline": {
+        "status": "idle",
+        "started_at": None,
+        "ended_at": None,
+        "last_rc": None,
+        "last_lines": [],
+    },
+    "auto_refresh": {
         "status": "idle",
         "started_at": None,
         "ended_at": None,
@@ -142,6 +154,14 @@ def etl_pipeline_start():
     return {"status": "started"}
 
 
+@app.post("/automation/auto_refresh/start")
+def automation_auto_refresh_start():
+    args = [sys.executable, "-u", os.path.join("automation", "auto_refresh.py")]
+    if not _start_job("auto_refresh", args):
+        raise HTTPException(status_code=409, detail="auto_refresh already running")
+    return {"status": "started"}
+
+
 @app.get("/etl/status")
 def etl_status():
     return RUNS
@@ -185,13 +205,21 @@ def places(
         bf.umbrella_affinity AS facts_umbrella_affinity,
         bf.budget_source,
         bf.provenance,
-        bf.notes,
         bf.updated_at AS facts_updated_at,
         bf.source_provider,
-        bf.source_model
+        bf.source_model,
+        er.raw_response AS llm_raw_response
     FROM places_clean p
     JOIN business_metrics bm ON bm.business_id = p.place_id
     LEFT JOIN business_facts bf ON bf.business_id = p.place_id
+    LEFT JOIN LATERAL (
+        SELECT resp.raw_response
+        FROM enrichment_request req
+        JOIN enrichment_response resp ON resp.request_id = req.request_id
+        WHERE req.business_id = p.place_id
+        ORDER BY resp.created_at DESC
+        LIMIT 1
+    ) er ON TRUE
     WHERE 1=1
     """
     params: list[Any] = []
