@@ -48,18 +48,21 @@ CREATE TABLE places_clean (
   location GEOGRAPHY(POINT, 4326)
 );
 
-CREATE TABLE place_context (
-  place_id TEXT PRIMARY KEY REFERENCES places_clean(place_id),
-  density_500m INT,
-  distance_poi_avg NUMERIC
+CREATE TABLE IF NOT EXISTS brello_stations (
+  station_id SERIAL PRIMARY KEY,
+  name TEXT,
+  geom GEOGRAPHY(POINT,4326),
+  metadata JSONB,
+  created_at TIMESTAMP DEFAULT now()
 );
 
-CREATE TABLE company_scores (
-  place_id TEXT PRIMARY KEY REFERENCES places_clean(place_id),
-  popularity_score NUMERIC,
-  territory_score NUMERIC,
-  accessibility_score NUMERIC,
-  total_score NUMERIC
+CREATE TABLE IF NOT EXISTS geo_zones (
+  zone_id SERIAL PRIMARY KEY,
+  label TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  priority INT NOT NULL DEFAULT 100,
+  geom GEOMETRY(MULTIPOLYGON,4326) NOT NULL,
+  created_at TIMESTAMP DEFAULT now()
 );
 -- Attività OSM (business)
 CREATE TABLE IF NOT EXISTS osm_business (
@@ -80,4 +83,74 @@ CREATE TABLE IF NOT EXISTS osm_roads (
   highway TEXT,                -- primary, secondary, residential...
   name TEXT,
   geom GEOGRAPHY(LINESTRING,4326)
+);
+
+CREATE TABLE IF NOT EXISTS enrichment_request (
+  request_id TEXT PRIMARY KEY,
+  business_id TEXT REFERENCES places_clean(place_id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  input_payload JSONB NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  error TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT now(),
+  started_at TIMESTAMP,
+  finished_at TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS enrichment_request_business_hash_idx
+  ON enrichment_request (business_id, input_hash);
+
+CREATE TABLE IF NOT EXISTS enrichment_response (
+  response_id TEXT PRIMARY KEY,
+  request_id TEXT REFERENCES enrichment_request(request_id) ON DELETE CASCADE,
+  model TEXT,
+  raw_response JSONB,
+  parsed_response JSONB,
+  prompt_tokens INT,
+  completion_tokens INT,
+  cost_cents NUMERIC,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS business_facts (
+  business_id TEXT PRIMARY KEY REFERENCES places_clean(place_id) ON DELETE CASCADE,
+  size_class TEXT CHECK (size_class IN ('micro','piccola','media','grande')),
+  is_chain BOOLEAN,
+  website_url TEXT,
+  social JSONB,
+  marketing_attitude NUMERIC,
+  umbrella_affinity NUMERIC,
+  ad_budget_band TEXT CHECK (ad_budget_band IN ('basso','medio','alto')),
+  budget_source TEXT,
+  confidence NUMERIC,
+  provenance JSONB,
+  updated_at TIMESTAMP DEFAULT now(),
+  source_provider TEXT,
+  source_model TEXT
+);
+
+CREATE TABLE IF NOT EXISTS place_sector_density (
+  place_id TEXT PRIMARY KEY REFERENCES places_clean(place_id) ON DELETE CASCADE,
+  sector TEXT,
+  neighbor_count INT,
+  density_score NUMERIC,
+  computed_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS business_metrics (
+  business_id TEXT PRIMARY KEY REFERENCES places_clean(place_id) ON DELETE CASCADE,
+  sector_density_neighbors INT,
+  sector_density_score NUMERIC,
+  geo_distribution_label TEXT,
+  geo_distribution_source TEXT,
+  size_class TEXT,
+  is_chain BOOLEAN,
+  ad_budget_band TEXT,
+  umbrella_affinity NUMERIC,
+  digital_presence NUMERIC,
+  digital_presence_confidence NUMERIC,
+  marketing_attitude NUMERIC,
+  facts_confidence NUMERIC,
+  updated_at TIMESTAMP DEFAULT now()
 );

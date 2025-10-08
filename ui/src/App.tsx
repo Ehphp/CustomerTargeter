@@ -15,6 +15,20 @@ type PlaceRow = {
   accessibility_score: number;
 };
 
+type SortColumn =
+  | "name"
+  | "city"
+  | "category"
+  | "total_score"
+  | "popularity_score"
+  | "territory_score"
+  | "accessibility_score";
+
+type SortState = {
+  column: SortColumn;
+  direction: "asc" | "desc";
+};
+
 type CountRow = { tbl: string; count: number };
 
 type Filters = {
@@ -37,6 +51,81 @@ type ETLStatus = {
   pipeline: JobState;
 };
 
+const DEFAULT_SORT_DIRECTION: Record<SortColumn, SortState["direction"]> = {
+  name: "asc",
+  city: "asc",
+  category: "asc",
+  total_score: "desc",
+  popularity_score: "desc",
+  territory_score: "desc",
+  accessibility_score: "desc",
+};
+
+function compareStrings(
+  a: string | null | undefined,
+  b: string | null | undefined,
+  direction: SortState["direction"],
+) {
+  const aVal = (a ?? "").trim().toLowerCase();
+  const bVal = (b ?? "").trim().toLowerCase();
+  const aEmpty = aVal.length === 0;
+  const bEmpty = bVal.length === 0;
+
+  if (aEmpty || bEmpty) {
+    if (aEmpty === bEmpty) return 0;
+    return aEmpty ? 1 : -1;
+  }
+
+  return direction === "asc"
+    ? aVal.localeCompare(bVal)
+    : bVal.localeCompare(aVal);
+}
+
+function compareNumbers(
+  a: number | null | undefined,
+  b: number | null | undefined,
+  direction: SortState["direction"],
+) {
+  const aMissing = a == null || Number.isNaN(a);
+  const bMissing = b == null || Number.isNaN(b);
+
+  if (aMissing || bMissing) {
+    if (aMissing === bMissing) return 0;
+    return aMissing ? 1 : -1;
+  }
+
+  if (a === b) return 0;
+  return direction === "asc"
+    ? a < b ? -1 : 1
+    : a < b ? 1 : -1;
+}
+
+function compareByColumn(
+  a: PlaceRow,
+  b: PlaceRow,
+  column: SortColumn,
+  direction: SortState["direction"],
+) {
+  switch (column) {
+    case "name":
+      return compareStrings(a.name, b.name, direction);
+    case "city":
+      return compareStrings(a.city, b.city, direction);
+    case "category":
+      return compareStrings(a.category, b.category, direction);
+    case "total_score":
+      return compareNumbers(a.total_score, b.total_score, direction);
+    case "popularity_score":
+      return compareNumbers(a.popularity_score, b.popularity_score, direction);
+    case "territory_score":
+      return compareNumbers(a.territory_score, b.territory_score, direction);
+    case "accessibility_score":
+      return compareNumbers(a.accessibility_score, b.accessibility_score, direction);
+    default:
+      return 0;
+  }
+}
+
 /* ===== Componenti ===== */
 const ScoreBadge: React.FC<{ value: number }> = ({ value }) => {
   const color =
@@ -54,16 +143,12 @@ const ScoreBadge: React.FC<{ value: number }> = ({ value }) => {
 const Row: React.FC<{ r: PlaceRow }> = ({ r }) => (
   <tr className="border-b hover:bg-slate-50">
     <td className="py-3.5 px-4 font-medium">{r.name}</td>
-    <td className="py-3.5 px-4 text-slate-600">{r.city ?? "—"}</td>
-    <td className="py-3.5 px-4 text-slate-600">{r.category ?? "—"}</td>
-    <td className="py-3.5 px-4"><ScoreBadge value={r.total_score || 0} /></td>
-    <td className="py-3.5 px-4">
-      <div className="flex gap-1.5 text-xs text-slate-600">
-        <span title="Popularity (0–50)" className="px-2 py-1 rounded bg-slate-100">⭐ {Math.round(r.popularity_score || 0)}</span>
-        <span title="Context (0–30)" className="px-2 py-1 rounded bg-slate-100">🌍 {Math.round(r.territory_score || 0)}</span>
-        <span title="Accessibility (0–20)" className="px-2 py-1 rounded bg-slate-100">🕓 {Math.round(r.accessibility_score || 0)}</span>
-      </div>
-    </td>
+    <td className="py-3.5 px-4 text-slate-600">{r.city ?? "-"}</td>
+    <td className="py-3.5 px-4 text-slate-600">{r.category ?? "-"}</td>
+    <td className="py-3.5 px-4 text-right"><ScoreBadge value={r.total_score ?? 0} /></td>
+    <td className="py-3.5 px-4 text-right text-slate-600">{Math.round(r.popularity_score ?? 0)}</td>
+    <td className="py-3.5 px-4 text-right text-slate-600">{Math.round(r.territory_score ?? 0)}</td>
+    <td className="py-3.5 px-4 text-right text-slate-600">{Math.round(r.accessibility_score ?? 0)}</td>
   </tr>
 );
 
@@ -71,6 +156,7 @@ export default function App() {
   const [apiBase, setApiBase] = useState<string>(API_DEFAULT);
   const [filters, setFilters] = useState<Filters>({ city: "", category: "", min_score: 0, limit: 50 });
   const [rows, setRows] = useState<PlaceRow[]>([]);
+  const [sort, setSort] = useState<SortState | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
   const [counts, setCounts] = useState<CountRow[] | null>(null);
@@ -86,6 +172,33 @@ export default function App() {
     q.set("limit", String(filters.limit ?? 50));
     return q.toString();
   }, [filters]);
+  const sortedRows = useMemo(() => {
+    if (!sort) return rows;
+    return [...rows].sort((a, b) => compareByColumn(a, b, sort.column, sort.direction));
+  }, [rows, sort]);
+
+  const handleSort = (column: SortColumn) => {
+    setSort((prev) => {
+      if (prev?.column === column) {
+        return { column, direction: prev.direction === "asc" ? "desc" : "asc" };
+      }
+      return { column, direction: DEFAULT_SORT_DIRECTION[column] };
+    });
+  };
+
+  const ariaSort = (column: SortColumn): "none" | "ascending" | "descending" => {
+    if (sort?.column !== column) return "none";
+    return sort.direction === "asc" ? "ascending" : "descending";
+  };
+
+  const sortIndicator = (column: SortColumn) => {
+    if (sort?.column !== column) return null;
+    return (
+      <span className="ml-1 text-xs text-slate-500">
+        {sort.direction === "asc" ? "^" : "v"}
+      </span>
+    );
+  };
 
   async function fetchCounts() {
     try {
@@ -345,20 +458,113 @@ export default function App() {
             <table className="table.ui-table thead.ui-thead th.ui-th td.ui-td min-w-full text-sm">
               <thead className="bg-slate-50 border-b">
                 <tr>
-                  <th className="text-left py-3 px-4">Name</th>
-                  <th className="text-left py-3 px-4">City</th>
-                  <th className="text-left py-3 px-4">Category</th>
-                  <th className="text-left py-3 px-4">Score</th>
-                  <th className="text-left py-3 px-4">Breakdown</th>
+                  <th
+                    scope="col"
+                    className="text-left py-3 px-4"
+                    aria-sort={ariaSort("name")}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleSort("name")}
+                      className="flex items-center gap-1 hover:text-blue-600 focus:outline-none"
+                    >
+                      <span>Name</span>
+                      {sortIndicator("name")}
+                    </button>
+                  </th>
+                  <th
+                    scope="col"
+                    className="text-left py-3 px-4"
+                    aria-sort={ariaSort("city")}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleSort("city")}
+                      className="flex items-center gap-1 hover:text-blue-600 focus:outline-none"
+                    >
+                      <span>City</span>
+                      {sortIndicator("city")}
+                    </button>
+                  </th>
+                  <th
+                    scope="col"
+                    className="text-left py-3 px-4"
+                    aria-sort={ariaSort("category")}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleSort("category")}
+                      className="flex items-center gap-1 hover:text-blue-600 focus:outline-none"
+                    >
+                      <span>Category</span>
+                      {sortIndicator("category")}
+                    </button>
+                  </th>
+                  <th
+                    scope="col"
+                    className="text-right py-3 px-4"
+                    aria-sort={ariaSort("total_score")}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleSort("total_score")}
+                      className="flex items-center justify-end gap-1 hover:text-blue-600 focus:outline-none"
+                    >
+                      <span>Score</span>
+                      {sortIndicator("total_score")}
+                    </button>
+                  </th>
+                  <th
+                    scope="col"
+                    className="text-right py-3 px-4"
+                    aria-sort={ariaSort("popularity_score")}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleSort("popularity_score")}
+                      className="flex items-center justify-end gap-1 hover:text-blue-600 focus:outline-none"
+                    >
+                      <span>Popularity</span>
+                      {sortIndicator("popularity_score")}
+                    </button>
+                  </th>
+                  <th
+                    scope="col"
+                    className="text-right py-3 px-4"
+                    aria-sort={ariaSort("territory_score")}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleSort("territory_score")}
+                      className="flex items-center justify-end gap-1 hover:text-blue-600 focus:outline-none"
+                    >
+                      <span>Context</span>
+                      {sortIndicator("territory_score")}
+                    </button>
+                  </th>
+                  <th
+                    scope="col"
+                    className="text-right py-3 px-4"
+                    aria-sort={ariaSort("accessibility_score")}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleSort("accessibility_score")}
+                      className="flex items-center justify-end gap-1 hover:text-blue-600 focus:outline-none"
+                    >
+                      <span>Accessibility</span>
+                      {sortIndicator("accessibility_score")}
+                    </button>
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={5} className="py-12 px-4 text-center text-slate-500">Loading…</td></tr>
-                ) : rows.length === 0 ? (
-                  <tr><td colSpan={5} className="py-12 px-4 text-center text-slate-500">No results yet. Adjust filters and press Search.</td></tr>
+                  <tr><td colSpan={7} className="py-12 px-4 text-center text-slate-500">Loading...</td></tr>
+                ) : sortedRows.length === 0 ? (
+                  <tr><td colSpan={7} className="py-12 px-4 text-center text-slate-500">No results yet. Adjust filters and press Search.</td></tr>
                 ) : (
-                  rows.map((r) => <Row key={r.place_id} r={r} />)
+                  sortedRows.map((r) => <Row key={r.place_id} r={r} />)
                 )}
               </tbody>
             </table>

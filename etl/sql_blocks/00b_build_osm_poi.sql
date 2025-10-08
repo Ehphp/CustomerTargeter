@@ -1,6 +1,8 @@
 -- Ricostruisce osm_poi a partire da osm_business
 BEGIN;
 
+-- Ricostruisci da zero per avere idempotenza tra gli eseguiti della pipeline
+TRUNCATE TABLE osm_poi RESTART IDENTITY;
 
 INSERT INTO osm_poi (osm_id, name, poi_type, tags, location)
 SELECT
