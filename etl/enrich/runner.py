@@ -4,9 +4,10 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional
 
 import psycopg2
@@ -18,6 +19,141 @@ from .prompts import build_prompt
 from .schema import EnrichedFacts, parse_enriched_facts
 
 logger = logging.getLogger(__name__)
+
+
+POSTCODE_RE = re.compile(r"\b\d{4,5}\b")
+PROVINCE_CODE_RE = re.compile(r"\b[A-Z]{2}\b$")
+WHITESPACE_RE = re.compile(r"\s+")
+
+REGION_KEYWORDS = {
+    "abruzzo",
+    "basilicata",
+    "calabria",
+    "campania",
+    "emilia-romagna",
+    "friuli-venezia giulia",
+    "lazio",
+    "liguria",
+    "lombardia",
+    "marche",
+    "molise",
+    "piemonte",
+    "puglia",
+    "sardegna",
+    "sicilia",
+    "toscana",
+    "trentino-alto adige",
+    "umbria",
+    "valle d'aosta",
+    "valle d aosta",
+    "veneto",
+    "provincia autonoma di bolzano",
+    "provincia autonoma di trento",
+}
+COUNTRY_KEYWORDS = {"italia", "italy", "repubblica italiana", "europe", "ue"}
+
+
+def _normalize(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = WHITESPACE_RE.sub(" ", value).strip()
+    return cleaned or None
+
+
+def _should_skip_part(part: str) -> bool:
+    norm = _normalize(part)
+    if not norm:
+        return True
+    lower = norm.lower()
+    if lower in COUNTRY_KEYWORDS:
+        return True
+    if lower in REGION_KEYWORDS:
+        return True
+    return False
+
+
+def _sanitize_city_candidate(part: str) -> Optional[str]:
+    cleaned = POSTCODE_RE.sub("", part)
+    cleaned = PROVINCE_CODE_RE.sub("", cleaned).strip(" ,;/\\-")
+    cleaned = WHITESPACE_RE.sub(" ", cleaned).strip()
+    if not cleaned:
+        return None
+    if cleaned.lower() in COUNTRY_KEYWORDS or cleaned.lower() in REGION_KEYWORDS:
+        return None
+    return cleaned
+
+
+def _resolve_city(
+    city: Optional[str],
+    tags: Optional[Mapping[str, Any]],
+    formatted_address: Optional[str],
+) -> Optional[str]:
+    current = _normalize(city)
+    if current:
+        return current
+
+    if isinstance(tags, Mapping):
+        for key in ("addr:city", "addr:town", "addr:village", "addr:hamlet", "addr:municipality", "addr:suburb"):
+            value = _normalize(tags.get(key)) if tags else None
+            if value:
+                return value
+
+    if formatted_address:
+        parts = [p.strip() for p in formatted_address.split(",") if p.strip()]
+        for part in reversed(parts):
+            if _should_skip_part(part):
+                continue
+            candidate = _sanitize_city_candidate(part)
+            if not candidate:
+                continue
+            if any(ch.isdigit() for ch in candidate):
+                candidate = "".join(ch for ch in candidate if not ch.isdigit()).strip()
+            candidate = _normalize(candidate)
+            if candidate and not candidate.isdigit():
+                return candidate
+    return None
+
+
+def _resolve_address(
+    address: Optional[str],
+    formatted_address: Optional[str],
+    tags: Optional[Mapping[str, Any]],
+    fallback_city: Optional[str],
+) -> Optional[str]:
+    primary = _normalize(address)
+    if primary:
+        return primary
+
+    formatted = _normalize(formatted_address)
+    if formatted:
+        return formatted
+
+    if not isinstance(tags, Mapping):
+        return None
+
+    street = _normalize(tags.get("addr:street") or tags.get("addr:road") or tags.get("addr:place"))
+    housenumber = _normalize(tags.get("addr:housenumber") or tags.get("addr:number"))
+    locality = (
+        _normalize(tags.get("addr:city") or tags.get("addr:town") or tags.get("addr:village") or tags.get("addr:hamlet"))
+        or fallback_city
+    )
+    postcode = _normalize(tags.get("addr:postcode"))
+
+    components: list[str] = []
+    if street and housenumber:
+        components.append(f"{street} {housenumber}")
+    elif street:
+        components.append(street)
+    elif housenumber:
+        components.append(housenumber)
+
+    if locality:
+        components.append(locality)
+    if postcode:
+        components.append(postcode)
+
+    result = ", ".join(dict.fromkeys([c for c in components if c]))
+    return result or None
 
 
 @dataclass
@@ -40,6 +176,10 @@ class BusinessRow:
     raw_phone: Optional[str]
     raw_website: Optional[str]
     opening_hours_json: Optional[dict[str, Any]]
+    latitude: Optional[float]
+    longitude: Optional[float]
+    _resolved_city: Optional[str] = field(init=False, repr=False, default=None)
+    _resolved_address: Optional[str] = field(init=False, repr=False, default=None)
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "BusinessRow":
@@ -62,14 +202,26 @@ class BusinessRow:
             raw_phone=row.get("raw_phone"),
             raw_website=row.get("raw_website"),
             opening_hours_json=row.get("opening_hours_json"),
+            latitude=row.get("latitude"),
+            longitude=row.get("longitude"),
         )
+
+    def __post_init__(self) -> None:
+        self._resolved_city = _resolve_city(self.city, self.tags, self.formatted_address)
+        self._resolved_address = _resolve_address(self.address, self.formatted_address, self.tags, self._resolved_city)
+
+    def resolved_city(self) -> Optional[str]:
+        return self._resolved_city or None
+
+    def resolved_address(self) -> Optional[str]:
+        return self._resolved_address or None
 
     def to_prompt_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "category": self.category,
-            "address": self.address or self.formatted_address,
-            "city": self.city,
+            "address": self.resolved_address(),
+            "city": self.resolved_city(),
             "types": self.types,
             "tags": self.tags,
             "osm_category": self.osm_category,
@@ -87,8 +239,8 @@ class BusinessRow:
         raw = [
             self.place_id,
             self.name or "",
-            self.address or "",
-            self.city or "",
+            self.resolved_address() or "",
+            self.resolved_city() or "",
             self.category or "",
             json.dumps(self.types or [], ensure_ascii=False, sort_keys=True),
             json.dumps(self.tags or {}, ensure_ascii=False, sort_keys=True),
@@ -102,8 +254,8 @@ class BusinessRow:
             "version": version,
             "place_id": self.place_id,
             "name": self.name,
-            "address": self.address,
-            "city": self.city,
+            "address": self.resolved_address(),
+            "city": self.resolved_city(),
             "category": self.category,
             "types": self.types,
             "tags": self.tags,
@@ -144,10 +296,18 @@ class EnrichmentRunner:
                 self.log.info("No businesses require enrichment")
                 return
 
-            self.log.info("Processing %d businesses (dry_run=%s)", len(candidates), dry_run)
-            for row in candidates:
+            total = len(candidates)
+            self.log.info("Processing %d businesses (dry_run=%s)", total, dry_run)
+            for idx, row in enumerate(candidates, start=1):
                 business = BusinessRow.from_row(row)
                 try:
+                    self.log.info(
+                        "Enrichment progress %d/%d: %s (%s)",
+                        idx,
+                        total,
+                        business.place_id,
+                        business.category or "unknown",
+                    )
                     if dry_run or self.client is None:
                         self._log_dry_run(business, dry_run)
                         conn.rollback()
@@ -181,8 +341,8 @@ class EnrichmentRunner:
             SELECT
               p.place_id,
               p.name,
-              p.address,
-              p.city,
+              COALESCE(NULLIF(p.address, ''), pr.formatted_address) AS address,
+              COALESCE(NULLIF(p.city, ''), city_guess.comune) AS city,
               p.category,
               p.has_phone,
               p.has_website,
@@ -196,11 +356,21 @@ class EnrichmentRunner:
               ob.category AS osm_category,
               ob.subtype AS osm_subtype,
               bf.updated_at AS facts_updated_at,
-              bf.confidence AS facts_confidence
+              bf.confidence AS facts_confidence,
+              ST_Y(p.location::geometry) AS latitude,
+              ST_X(p.location::geometry) AS longitude
             FROM places_clean p
             JOIN places_raw pr ON pr.place_id = p.place_id
             LEFT JOIN osm_business ob ON ob.osm_id = SUBSTRING(p.place_id FROM 5)
             LEFT JOIN business_facts bf ON bf.business_id = p.place_id
+            LEFT JOIN LATERAL (
+              SELECT i.comune
+              FROM istat_comuni i
+              WHERE i.geom && p.location::geometry
+                AND ST_Intersects(i.geom, p.location::geometry)
+              ORDER BY i.popolazione DESC NULLS LAST, i.comune
+              LIMIT 1
+            ) city_guess ON TRUE
             WHERE {where_clause}
             ORDER BY bf.updated_at NULLS FIRST, p.place_id
             LIMIT %s
@@ -238,10 +408,17 @@ class EnrichmentRunner:
         except LLMError as exc:
             self._mark_request_error(conn, request_id, str(exc))
             raise
-
         try:
             facts = parse_enriched_facts(result.text)
         except ValueError as exc:
+            snippet = result.text.strip()
+            snippet = snippet[:500] + ("…" if len(snippet) > 500 else "")
+            self.log.error(
+                "Failed to parse LLM response for %s: %s | response snippet: %s",
+                business.place_id,
+                exc,
+                snippet,
+            )
             self._mark_request_error(conn, request_id, str(exc))
             raise
 
@@ -276,8 +453,12 @@ class EnrichmentRunner:
             """,
             (request_id, business_id, provider, input_hash, Json(payload)),
         )
-        persisted_id = cur.fetchone()[0]
-        return persisted_id
+        row = cur.fetchone()
+        if not row:
+            raise RuntimeError("Failed to persist enrichment_request row")
+        if isinstance(row, dict):
+            return row["request_id"]
+        return row[0]
 
     def _store_response(
         self,

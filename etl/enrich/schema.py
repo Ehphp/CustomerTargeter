@@ -10,16 +10,16 @@ BudgetBand = Literal["basso", "medio", "alto"]
 
 
 class EnrichedFacts(BaseModel):
-    size_class: Optional[SizeClass]
-    is_chain: Optional[bool]
-    website_url: Optional[HttpUrl]
-    social: Optional[Dict[str, HttpUrl]]
+    size_class: Optional[SizeClass] = None
+    is_chain: Optional[bool] = None
+    website_url: Optional[HttpUrl] = None
+    social: Optional[Dict[str, HttpUrl]] = None
     marketing_attitude: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     umbrella_affinity: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    ad_budget_band: Optional[BudgetBand]
+    ad_budget_band: Optional[BudgetBand] = None
     confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    provenance: Optional[Dict[str, Any]]
-    notes: Optional[str]
+    provenance: Optional[Dict[str, Any]] = None
+    notes: Optional[str] = None
 
     class Config:
         extra = "ignore"
