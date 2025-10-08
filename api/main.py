@@ -177,9 +177,16 @@ def places(
         bm.digital_presence_confidence,
         bm.marketing_attitude,
         bm.facts_confidence,
+        bm.updated_at AS metrics_updated_at,
         bf.website_url,
         bf.social,
         bf.confidence AS facts_confidence_override,
+        bf.marketing_attitude AS facts_marketing_attitude,
+        bf.umbrella_affinity AS facts_umbrella_affinity,
+        bf.budget_source,
+        bf.provenance,
+        bf.notes,
+        bf.updated_at AS facts_updated_at,
         bf.source_provider,
         bf.source_model
     FROM places_clean p

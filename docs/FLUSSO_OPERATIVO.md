@@ -65,6 +65,16 @@ E calcola:
 
 Risultato finale in `business_metrics` (upsert con `ON CONFLICT`). Verifica: `SELECT COUNT(*) FROM business_metrics`.
 
+## 4-bis. Automazione Enrichment + Metriche
+```
+(.venv) python -m automation.auto_refresh [--dry-run]
+```
+- Carica `.env`, controlla il database e verifica se ci sono business oltre il TTL (`ENRICHMENT_TTL_DAYS`, default 30) o senza `business_facts`.
+- Esegue automaticamente `python -m etl.enrich.run_enrichment --limit 100` (limite personalizzabile con `--enrich-limit` oppure variabile `AUTO_REFRESH_ENRICH_LIMIT`).
+- Interroga Postgres e manda al LLM solo i business privi di `business_facts` oppure con un `updated_at` oltre il TTL (a meno di usare `--force-enrichment`).
+- Lancia `python -m feature_builder.build_metrics` subito dopo l'enrichment (anche se non c'erano record mancanti puoi forzare con `--always-run-metrics`).
+- Usa `--dry-run` per vedere il report senza avviare i job; `--force-enrichment` ignora il TTL ma aggiorna comunque le metriche.
+
 ## 5. API FastAPI
 ```
 (.venv) uvicorn api.main:app --reload

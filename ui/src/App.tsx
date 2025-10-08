@@ -22,8 +22,15 @@ type PlaceRow = {
   marketing_attitude?: number | null;
   facts_confidence?: number | null;
   facts_confidence_override?: number | null;
+  metrics_updated_at?: string | null;
   website_url?: string | null;
   social?: Record<string, string> | null;
+  facts_marketing_attitude?: number | null;
+  facts_umbrella_affinity?: number | null;
+  budget_source?: string | null;
+  provenance?: Record<string, unknown> | null;
+  notes?: string | null;
+  facts_updated_at?: string | null;
   source_provider?: string | null;
   source_model?: string | null;
 };
@@ -163,6 +170,17 @@ function humanizeLabel(label: string | null | undefined): string {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
+function sanitizeId(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+function formatDate(value: string | null | undefined): string {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" });
+}
+
 const PercentBadge: React.FC<{ value?: number | null }> = ({ value }) => {
   const pct = clamp01(value);
   if (pct == null) {
@@ -192,49 +210,188 @@ const ConfidencePill: React.FC<{ value?: number | null }> = ({ value }) => {
   );
 };
 
-const Row: React.FC<{ r: PlaceRow }> = ({ r }) => {
+type DetailEntry = { label: string; value: React.ReactNode };
+
+const DetailList: React.FC<{ entries: DetailEntry[] }> = ({ entries }) => (
+  <dl className="space-y-1.5">
+    {entries.map((entry, idx) => (
+      <div key={`${entry.label}-${idx}`} className="flex gap-3">
+        <dt className="w-36 shrink-0 text-xs uppercase tracking-wide text-slate-500">{entry.label}</dt>
+        <dd className="text-sm text-slate-700 break-words">{entry.value ?? "-"}</dd>
+      </div>
+    ))}
+  </dl>
+);
+
+type RowProps = {
+  r: PlaceRow;
+  expanded: boolean;
+  onToggle: () => void;
+};
+
+const Row: React.FC<RowProps> = ({ r, expanded, onToggle }) => {
   const confidence = r.facts_confidence_override ?? r.facts_confidence ?? r.digital_presence_confidence;
+  const detailId = `details-${sanitizeId(r.place_id)}`;
   return (
-    <tr className="border-b hover:bg-slate-50 transition">
-      <td className="py-3.5 px-4 align-top">
-        <div className="font-medium text-slate-900">{r.name}</div>
-        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-          {r.size_class && (
-            <span className="px-2 py-0.5 rounded-full bg-slate-100 uppercase tracking-wide">
-              {r.size_class}
+    <>
+      <tr className="border-b hover:bg-slate-50 transition">
+        <td className="py-3.5 px-4 align-top">
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={onToggle}
+              aria-expanded={expanded}
+              aria-controls={detailId}
+              className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 text-slate-500 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-400"
+            >
+              <span aria-hidden="true">{expanded ? "v" : ">"}</span>
+              <span className="sr-only">Mostra dettagli</span>
+            </button>
+            <div>
+              <div className="font-medium text-slate-900">{r.name}</div>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                {r.size_class && (
+                  <span className="px-2 py-0.5 rounded-full bg-slate-100 uppercase tracking-wide">
+                    {r.size_class}
+                  </span>
+                )}
+                {r.ad_budget_band && (
+                  <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 uppercase tracking-wide">
+                    budget {r.ad_budget_band}
+                  </span>
+                )}
+                {typeof r.is_chain === "boolean" && (
+                  <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                    {r.is_chain ? "Catena" : "Indipendente"}
+                  </span>
+                )}
+                {confidence != null && <ConfidencePill value={confidence} />}
+              </div>
+            </div>
+          </div>
+        </td>
+        <td className="py-3.5 px-4 text-slate-600">{r.city ?? "-"}</td>
+        <td className="py-3.5 px-4 text-slate-600">{r.category ?? "-"}</td>
+        <td className="py-3.5 px-4 text-slate-600">{humanizeLabel(r.geo_distribution_label)}</td>
+        <td className="py-3.5 px-4 text-right">
+          <PercentBadge value={r.umbrella_affinity} />
+        </td>
+        <td className="py-3.5 px-4 text-right">
+          <PercentBadge value={r.digital_presence} />
+        </td>
+        <td className="py-3.5 px-4 text-right">
+          <div className="flex items-center justify-end gap-2">
+            <PercentBadge value={r.sector_density_score} />
+            <span className="text-xs text-slate-500 whitespace-nowrap">
+              {r.sector_density_neighbors ?? 0} vicini
             </span>
-          )}
-          {r.ad_budget_band && (
-            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 uppercase tracking-wide">
-              budget {r.ad_budget_band}
-            </span>
-          )}
-          {typeof r.is_chain === "boolean" && (
-            <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
-              {r.is_chain ? "Catena" : "Indipendente"}
-            </span>
-          )}
-          {confidence != null && <ConfidencePill value={confidence} />}
-        </div>
-      </td>
-      <td className="py-3.5 px-4 text-slate-600">{r.city ?? "-"}</td>
-      <td className="py-3.5 px-4 text-slate-600">{r.category ?? "-"}</td>
-      <td className="py-3.5 px-4 text-slate-600">{humanizeLabel(r.geo_distribution_label)}</td>
-      <td className="py-3.5 px-4 text-right">
-        <PercentBadge value={r.umbrella_affinity} />
-      </td>
-      <td className="py-3.5 px-4 text-right">
-        <PercentBadge value={r.digital_presence} />
-      </td>
-      <td className="py-3.5 px-4 text-right">
-        <div className="flex items-center justify-end gap-2">
-          <PercentBadge value={r.sector_density_score} />
-          <span className="text-xs text-slate-500 whitespace-nowrap">
-            {r.sector_density_neighbors ?? 0} vicini
-          </span>
-        </div>
-      </td>
-    </tr>
+          </div>
+        </td>
+      </tr>
+      {expanded && (
+        <tr className="border-b bg-slate-50">
+          <td colSpan={7} className="px-4 pb-5 pt-0 text-sm text-slate-600">
+            <div id={detailId} className="pt-4">
+              <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Profilo & Budget</h4>
+                  <div className="mt-2">
+                    <DetailList
+                      entries={[
+                        { label: "Dimensione", value: r.size_class ?? "-" },
+                        {
+                          label: "Catena",
+                          value: typeof r.is_chain === "boolean" ? (r.is_chain ? "Catena" : "Indipendente") : "-",
+                        },
+                        { label: "Budget", value: r.ad_budget_band ?? "-" },
+                        { label: "Fonte budget", value: r.budget_source ?? "-" },
+                        { label: "Marketing (metriche)", value: formatPercent(r.marketing_attitude) },
+                        { label: "Marketing (LLM)", value: formatPercent(r.facts_marketing_attitude) },
+                        { label: "Affinita (LLM)", value: formatPercent(r.facts_umbrella_affinity) },
+                      ]}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Digitale & Territorio
+                  </h4>
+                  <div className="mt-2">
+                    <DetailList
+                      entries={[
+                        { label: "Presenza digitale", value: formatPercent(r.digital_presence) },
+                        { label: "Confidenza digitale", value: formatPercent(r.digital_presence_confidence) },
+                        { label: "Geo area", value: humanizeLabel(r.geo_distribution_label) },
+                        { label: "Fonte geo", value: r.geo_distribution_source ?? "-" },
+                        { label: "Densita settore", value: formatPercent(r.sector_density_score) },
+                        { label: "N. vicini", value: r.sector_density_neighbors ?? "-" },
+                        { label: "Ultimo aggiornamento metriche", value: formatDate(r.metrics_updated_at) },
+                      ]}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Fonti & Note</h4>
+                  <div className="mt-2 space-y-2">
+                    <DetailList
+                      entries={[
+                        {
+                          label: "Website",
+                          value: r.website_url ? (
+                            <a
+                              href={r.website_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-blue-600 hover:underline"
+                            >
+                              {r.website_url}
+                            </a>
+                          ) : (
+                            "-"
+                          ),
+                        },
+                        {
+                          label: "Social",
+                          value:
+                            r.social && Object.keys(r.social).length > 0 ? (
+                              <ul className="space-y-1">
+                                {Object.entries(r.social).map(([network, url]) => (
+                                  <li key={network}>
+                                    <a
+                                      className="text-blue-600 hover:underline"
+                                      href={url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      {network}: {url}
+                                    </a>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              "-"
+                            ),
+                        },
+                        { label: "Confidenza LLM", value: formatPercent(confidence) },
+                        { label: "Fonte LLM", value: r.source_provider ?? "-" },
+                        { label: "Modello", value: r.source_model ?? "-" },
+                        { label: "Aggiornamento LLM", value: formatDate(r.facts_updated_at) },
+                      ]}
+                    />
+                    {r.notes && <p className="text-sm text-slate-700">{r.notes}</p>}
+                    {r.provenance && (
+                      <pre className="whitespace-pre-wrap rounded bg-white/80 p-3 text-xs text-slate-600 shadow-inner">
+                        {JSON.stringify(r.provenance, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 };
 
@@ -253,6 +410,7 @@ export default function App() {
     limit: 50,
   });
   const [rows, setRows] = useState<PlaceRow[]>([]);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [sort, setSort] = useState<SortState | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
@@ -281,6 +439,12 @@ export default function App() {
     if (!sort) return rows;
     return [...rows].sort((a, b) => compareByColumn(a, b, sort.column, sort.direction));
   }, [rows, sort]);
+
+  useEffect(() => {
+    if (expandedId && !rows.some((row) => row.place_id === expandedId)) {
+      setExpandedId(null);
+    }
+  }, [rows, expandedId]);
 
   const handleSort = (column: SortColumn) => {
     setSort((prev) => {
@@ -748,7 +912,16 @@ export default function App() {
                 ) : sortedRows.length === 0 ? (
                   <tr><td colSpan={7} className="py-12 px-4 text-center text-slate-500">No results yet. Adjust filters and press Search.</td></tr>
                 ) : (
-                  sortedRows.map((r) => <Row key={r.place_id} r={r} />)
+                  sortedRows.map((r) => (
+                    <Row
+                      key={r.place_id}
+                      r={r}
+                      expanded={expandedId === r.place_id}
+                      onToggle={() =>
+                        setExpandedId((prev) => (prev === r.place_id ? null : r.place_id))
+                      }
+                    />
+                  ))
                 )}
               </tbody>
             </table>
