@@ -7,8 +7,8 @@ Questo documento riassume l'intero ciclo dati di CustomerTarget, dalla raccolta 
 - **Variabili `.env`** (root del repo):
   - Parametri Postgres (`POSTGRES_*`).
   - Credenziali Overpass/Google se disponibili (`GOOGLE_PLACES_API_KEY`).
-  - Per l’arricchimento: `LLM_PROVIDER` + `OPENAI_API_KEY` oppure `PERPLEXITY_API_KEY`, opzionalmente `LLM_MODEL`.
-- **Container DB**: `docker-compose up -d` avvia PostGIS e Adminer (`docs/ARCHITETTURA.md` descrive lo schema completo).
+  - Parametri prompt: `ENRICHMENT_PROMPT_VERSION` (default 2) e `ENRICHMENT_SEARCH_RADIUS_M` (default 200 m).
+  - Per l'arricchimento: `LLM_PROVIDER` + `OPENAI_API_KEY` oppure `PERPLEXITY_API_KEY`, opzionalmente `LLM_MODEL`.
 
 ## 1. Ingest OSM
 ```
@@ -38,7 +38,8 @@ Esegue in sequenza gli step di `etl/sql_blocks/`:
 - Costruisce il prompt con `build_prompt` includendo:
   - Nome, categoria, tags OSM, flag phone/website.
   - Indirizzo/città risolti: combina `places_clean.address`, `formatted_address`, `tags addr:*` e, se serve, un fallback geospaziale su `istat_comuni`.
-  - Coordinate e bounding box (≈200 m, configurabili con ENRICHMENT_SEARCH_RADIUS_M) che devono essere rispettati: se la posizione trovata è fuori area il modello deve lasciare i campi a null e abbassare confidence, spiegando il motivo in provenance.reasoning.
+  - Coordinate e bounding box (~200 m, configurabili con `ENRICHMENT_SEARCH_RADIUS_M`) che devono essere rispettati: se la posizione trovata è fuori area il modello deve lasciare i campi a null e abbassare `confidence`, spiegando il motivo in `provenance.reasoning`.
+- Il versioning del prompt è gestito da ENRICHMENT_PROMPT_VERSION (default 2): incrementalo quando modifichi il prompt per forzare un nuovo enrichment sulle attività esistenti.
 - Chiama l’LLM tramite `load_client_from_env` (`OpenAIChatClient` o `PerplexityClient`).
 - Valida l’output JSON con `EnrichedFacts` (`etl/enrich/schema.py`); se valido:
   - Aggiorna `enrichment_request`/`enrichment_response`.

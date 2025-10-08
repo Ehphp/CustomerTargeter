@@ -21,7 +21,7 @@ SCHEMA_EXAMPLE = {
         "reasoning": "Locale indipendente con forte presenza turistica.",
         "citations": [
             "https://www.esempio.it"
-        ]
+        ],
     },
 }
 
@@ -48,7 +48,7 @@ def _format_optional_details(business: Mapping[str, Any]) -> str:
     osm_category = business.get("osm_category")
     osm_subtype = business.get("osm_subtype")
     if osm_subtype and osm_subtype != osm_category:
-        details.append(f"- Tipologia OSM: {osm_category} → {osm_subtype}")
+        details.append(f"- Tipologia OSM: {osm_category} -> {osm_subtype}")
     elif osm_category:
         details.append(f"- Tipologia OSM: {osm_category}")
 
@@ -79,7 +79,7 @@ def _format_optional_details(business: Mapping[str, Any]) -> str:
         ]
         locality = ", ".join(part for part in locality_parts if part)
         if locality:
-            details.append(f"- Località dai tag OSM: {locality}")
+            details.append(f"- Localita dai tag OSM: {locality}")
 
         postcode = tags.get("addr:postcode")
         province = tags.get("addr:province") or tags.get("addr:state")
@@ -109,8 +109,8 @@ def _format_optional_details(business: Mapping[str, Any]) -> str:
 
 def build_prompt(business: Mapping[str, Any], include_schema: bool = True) -> str:
     """Craft the user prompt sent to the LLM."""
-    name = business.get("name") or "Attività sconosciuta"
-    category = business.get("category") or "attività generica"
+    name = business.get("name") or "Attivita sconosciuta"
+    category = business.get("category") or "attivita generica"
     address = business.get("address") or ""
     city = business.get("city") or ""
     lat = business.get("latitude")
@@ -120,7 +120,7 @@ def build_prompt(business: Mapping[str, Any], include_schema: bool = True) -> st
     coords_line = ""
     bbox_line = ""
     if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-        radius_hint = f" (raggio di ricerca ≈ {radius} m)" if radius else ""
+        radius_hint = f" (raggio di ricerca ~{radius} m)" if radius else ""
         coords_line = f"- Coordinate: lat {lat:.5f}, lon {lon:.5f}{radius_hint}"
         if radius:
             lat_delta = radius / 111_320
@@ -128,8 +128,8 @@ def build_prompt(business: Mapping[str, Any], include_schema: bool = True) -> st
             lon_delta = radius / lon_factor if lon_factor else 0.0
             bbox_line = (
                 f"- Bounding box approssimativo (+/-{radius} m): "
-                f"lat {lat - lat_delta:.5f} … {lat + lat_delta:.5f}, "
-                f"lon {lon - lon_delta:.5f} … {lon + lon_delta:.5f}"
+                f"lat {lat - lat_delta:.5f} .. {lat + lat_delta:.5f}, "
+                f"lon {lon - lon_delta:.5f} .. {lon + lon_delta:.5f}"
             )
     details = _format_optional_details(business)
     details_block = "\n".join(filter(None, [details, bbox_line]))
@@ -139,25 +139,25 @@ def build_prompt(business: Mapping[str, Any], include_schema: bool = True) -> st
 
     base = dedent(
         f"""
-        Sei un analista marketing locale specializzato in attività italiane di prossimità.
-        Devi arricchire le informazioni dell'attività descritta qui sotto compilando *solo* i campi dello schema dati.
+        Sei un analista marketing locale specializzato in attivita italiane di prossimita.
+        Devi arricchire le informazioni dell'attivita descritta qui sotto compilando *solo* i campi dello schema dati.
 
-        Attività:
+        Attivita:
         - Nome: {name}
         - Categoria: {category}
         - Indirizzo: {address}
-        - Città: {city}
+        - Citta: {city}
         {coords_line}
         {details_block}
 
         Regole:
         - Output: un unico JSON valido (nessun testo prima o dopo).
         - Se non sei certo di un dato, imposta null e riduci "confidence".
-        - Lavora SOLO su risultati entro il raggio indicato dalle coordinate: se le fonti portano fuori area o in un comune diverso, lascia i campi stimati a null, imposta "confidence" ≤ 0.25 e descrivi il problema in "provenance.reasoning".
+        - Lavora SOLO su risultati entro il raggio indicato dalle coordinate: se le fonti portano fuori area o in un comune diverso, lascia i campi stimati a null, imposta "confidence" <= 0.25 e descrivi il problema in "provenance.reasoning".
         - Confronta CAP, provincia e regione nei dettagli con le fonti trovate: eventuali discrepanze vanno motivate in "provenance.reasoning".
         - Riporta le fonti principali (URL) in "provenance.citations" quando disponibili, privilegiando siti istituzionali o elenchi ufficiali italiani.
         - "size_class": micro, piccola, media o grande considerando il contesto italiano.
-        - "umbrella_affinity": punteggio 0..1 su quanto un ombrello brandizzato Brellò è coerente con il target.
+        - "umbrella_affinity": punteggio 0..1 su quanto un ombrello brandizzato Brello e coerente con il target.
         - "ad_budget_band": stima prudente (basso, medio, alto) basata su categoria e dimensione.
         - "social": mappa piattaforma->URL solo se plausibile.
         - "provenance": motivazione sintetica o fonti sicure.
@@ -168,3 +168,4 @@ def build_prompt(business: Mapping[str, Any], include_schema: bool = True) -> st
     ).strip()
 
     return base
+
