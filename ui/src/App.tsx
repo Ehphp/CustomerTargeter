@@ -9,20 +9,32 @@ type PlaceRow = {
   name: string;
   city?: string | null;
   category?: string | null;
-  total_score: number;
-  popularity_score: number;
-  territory_score: number;
-  accessibility_score: number;
+  sector_density_score?: number | null;
+  sector_density_neighbors?: number | null;
+  geo_distribution_label?: string | null;
+  geo_distribution_source?: string | null;
+  size_class?: string | null;
+  is_chain?: boolean | null;
+  ad_budget_band?: string | null;
+  umbrella_affinity?: number | null;
+  digital_presence?: number | null;
+  digital_presence_confidence?: number | null;
+  marketing_attitude?: number | null;
+  facts_confidence?: number | null;
+  facts_confidence_override?: number | null;
+  website_url?: string | null;
+  social?: Record<string, string> | null;
+  source_provider?: string | null;
+  source_model?: string | null;
 };
 
 type SortColumn =
   | "name"
   | "city"
   | "category"
-  | "total_score"
-  | "popularity_score"
-  | "territory_score"
-  | "accessibility_score";
+  | "umbrella_affinity"
+  | "digital_presence"
+  | "sector_density_score";
 
 type SortState = {
   column: SortColumn;
@@ -31,10 +43,18 @@ type SortState = {
 
 type CountRow = { tbl: string; count: number };
 
+type ChainFilter = "any" | "yes" | "no";
+
 type Filters = {
   city: string;
   category: string;
-  min_score: number;
+  geo_label: string;
+  size_class: string;
+  ad_budget: string;
+  is_chain: ChainFilter;
+  min_affinity: number;
+  min_density: number;
+  min_digital: number;
   limit: number;
 };
 
@@ -55,10 +75,9 @@ const DEFAULT_SORT_DIRECTION: Record<SortColumn, SortState["direction"]> = {
   name: "asc",
   city: "asc",
   category: "asc",
-  total_score: "desc",
-  popularity_score: "desc",
-  territory_score: "desc",
-  accessibility_score: "desc",
+  umbrella_affinity: "desc",
+  digital_presence: "desc",
+  sector_density_score: "desc",
 };
 
 function compareStrings(
@@ -113,48 +132,126 @@ function compareByColumn(
       return compareStrings(a.city, b.city, direction);
     case "category":
       return compareStrings(a.category, b.category, direction);
-    case "total_score":
-      return compareNumbers(a.total_score, b.total_score, direction);
-    case "popularity_score":
-      return compareNumbers(a.popularity_score, b.popularity_score, direction);
-    case "territory_score":
-      return compareNumbers(a.territory_score, b.territory_score, direction);
-    case "accessibility_score":
-      return compareNumbers(a.accessibility_score, b.accessibility_score, direction);
+    case "umbrella_affinity":
+      return compareNumbers(a.umbrella_affinity, b.umbrella_affinity, direction);
+    case "digital_presence":
+      return compareNumbers(a.digital_presence, b.digital_presence, direction);
+    case "sector_density_score":
+      return compareNumbers(a.sector_density_score, b.sector_density_score, direction);
     default:
       return 0;
   }
 }
 
-/* ===== Componenti ===== */
-const ScoreBadge: React.FC<{ value: number }> = ({ value }) => {
+function clamp01(value: number | null | undefined): number | null {
+  if (value == null || Number.isNaN(value)) return null;
+  return Math.min(1, Math.max(0, value));
+}
+
+function formatPercent(value: number | null | undefined): string {
+  const pct = clamp01(value);
+  if (pct == null) return "-";
+  return `${Math.round(pct * 100)}%`;
+}
+
+function humanizeLabel(label: string | null | undefined): string {
+  if (!label) return "-";
+  const normalized = label.replace(/_/g, " ").trim();
+  if (normalized.toLowerCase() === "vicino brello") return "Vicino Brellò";
+  if (normalized.toLowerCase() === "passaggio") return "Passaggio";
+  if (normalized.toLowerCase() === "centro") return "Centro storico";
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+const PercentBadge: React.FC<{ value?: number | null }> = ({ value }) => {
+  const pct = clamp01(value);
+  if (pct == null) {
+    return <span className="inline-flex items-center justify-center px-2 py-1 text-xs rounded-full bg-slate-100 text-slate-500">-</span>;
+  }
+  const perc = pct * 100;
   const color =
-    value >= 80 ? "bg-emerald-600" :
-    value >= 60 ? "bg-green-500" :
-    value >= 40 ? "bg-amber-500" :
-    "bg-rose-600";
+    perc >= 75 ? "bg-emerald-100 text-emerald-700" :
+    perc >= 50 ? "bg-amber-100 text-amber-700" :
+    perc >= 25 ? "bg-sky-100 text-sky-700" :
+    "bg-slate-200 text-slate-600";
   return (
-    <span className={`inline-flex items-center px-2.5 py-1.5 text-xs font-semibold text-white rounded-full ${color}`}>
-      {Math.round(value)}
+    <span className={`inline-flex items-center justify-center px-2 py-1 text-xs font-semibold rounded-full ${color}`}>
+      {Math.round(perc)}%
     </span>
   );
 };
 
-const Row: React.FC<{ r: PlaceRow }> = ({ r }) => (
-  <tr className="border-b hover:bg-slate-50">
-    <td className="py-3.5 px-4 font-medium">{r.name}</td>
-    <td className="py-3.5 px-4 text-slate-600">{r.city ?? "-"}</td>
-    <td className="py-3.5 px-4 text-slate-600">{r.category ?? "-"}</td>
-    <td className="py-3.5 px-4 text-right"><ScoreBadge value={r.total_score ?? 0} /></td>
-    <td className="py-3.5 px-4 text-right text-slate-600">{Math.round(r.popularity_score ?? 0)}</td>
-    <td className="py-3.5 px-4 text-right text-slate-600">{Math.round(r.territory_score ?? 0)}</td>
-    <td className="py-3.5 px-4 text-right text-slate-600">{Math.round(r.accessibility_score ?? 0)}</td>
-  </tr>
-);
+const ConfidencePill: React.FC<{ value?: number | null }> = ({ value }) => {
+  const pct = clamp01(value);
+  if (pct == null) return null;
+  const perc = Math.round(pct * 100);
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 text-xs font-medium">
+      conf {perc}%
+    </span>
+  );
+};
+
+const Row: React.FC<{ r: PlaceRow }> = ({ r }) => {
+  const confidence = r.facts_confidence_override ?? r.facts_confidence ?? r.digital_presence_confidence;
+  return (
+    <tr className="border-b hover:bg-slate-50 transition">
+      <td className="py-3.5 px-4 align-top">
+        <div className="font-medium text-slate-900">{r.name}</div>
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+          {r.size_class && (
+            <span className="px-2 py-0.5 rounded-full bg-slate-100 uppercase tracking-wide">
+              {r.size_class}
+            </span>
+          )}
+          {r.ad_budget_band && (
+            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 uppercase tracking-wide">
+              budget {r.ad_budget_band}
+            </span>
+          )}
+          {typeof r.is_chain === "boolean" && (
+            <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+              {r.is_chain ? "Catena" : "Indipendente"}
+            </span>
+          )}
+          {confidence != null && <ConfidencePill value={confidence} />}
+        </div>
+      </td>
+      <td className="py-3.5 px-4 text-slate-600">{r.city ?? "-"}</td>
+      <td className="py-3.5 px-4 text-slate-600">{r.category ?? "-"}</td>
+      <td className="py-3.5 px-4 text-slate-600">{humanizeLabel(r.geo_distribution_label)}</td>
+      <td className="py-3.5 px-4 text-right">
+        <PercentBadge value={r.umbrella_affinity} />
+      </td>
+      <td className="py-3.5 px-4 text-right">
+        <PercentBadge value={r.digital_presence} />
+      </td>
+      <td className="py-3.5 px-4 text-right">
+        <div className="flex items-center justify-end gap-2">
+          <PercentBadge value={r.sector_density_score} />
+          <span className="text-xs text-slate-500 whitespace-nowrap">
+            {r.sector_density_neighbors ?? 0} vicini
+          </span>
+        </div>
+      </td>
+    </tr>
+  );
+};
 
 export default function App() {
   const [apiBase, setApiBase] = useState<string>(API_DEFAULT);
-  const [filters, setFilters] = useState<Filters>({ city: "", category: "", min_score: 0, limit: 50 });
+  const [filters, setFilters] = useState<Filters>({
+    city: "",
+    category: "",
+    geo_label: "",
+    size_class: "",
+    ad_budget: "",
+    is_chain: "any",
+    min_affinity: 0,
+    min_density: 0,
+    min_digital: 0,
+    limit: 50,
+  });
   const [rows, setRows] = useState<PlaceRow[]>([]);
   const [sort, setSort] = useState<SortState | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -168,10 +265,18 @@ export default function App() {
     const q = new URLSearchParams();
     if (filters.city) q.set("city", filters.city);
     if (filters.category) q.set("category", filters.category);
-    q.set("min_score", String(filters.min_score ?? 0));
-    q.set("limit", String(filters.limit ?? 50));
+    if (filters.geo_label) q.set("geo_label", filters.geo_label);
+    if (filters.size_class) q.set("size_class", filters.size_class);
+    if (filters.ad_budget) q.set("ad_budget", filters.ad_budget);
+    if (filters.is_chain === "yes") q.set("is_chain", "true");
+    if (filters.is_chain === "no") q.set("is_chain", "false");
+    if (filters.min_affinity > 0) q.set("min_affinity", (filters.min_affinity / 100).toFixed(2));
+    if (filters.min_density > 0) q.set("min_density", (filters.min_density / 100).toFixed(2));
+    if (filters.min_digital > 0) q.set("min_digital", (filters.min_digital / 100).toFixed(2));
+    q.set("limit", String(filters.limit || 50));
     return q.toString();
   }, [filters]);
+
   const sortedRows = useMemo(() => {
     if (!sort) return rows;
     return [...rows].sort((a, b) => compareByColumn(a, b, sort.column, sort.direction));
@@ -195,30 +300,28 @@ export default function App() {
     if (sort?.column !== column) return null;
     return (
       <span className="ml-1 text-xs text-slate-500">
-        {sort.direction === "asc" ? "^" : "v"}
+        {sort.direction === "asc" ? "▲" : "▼"}
       </span>
     );
   };
 
+  async function fetchHealth() {
+    try {
+      const r = await fetch(`${apiBase}/health`);
+      setHealthy(r.ok);
+    } catch {
+      setHealthy(false);
+    }
+  }
+
   async function fetchCounts() {
     try {
       const r = await fetch(`${apiBase}/counts`);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) throw new Error();
       const data = (await r.json()) as CountRow[];
       setCounts(data);
     } catch {
       setCounts(null);
-    }
-  }
-
-  async function fetchHealth() {
-    try {
-      const r = await fetch(`${apiBase}/health`);
-      if (!r.ok) throw new Error();
-      await r.json();
-      setHealthy(true);
-    } catch {
-      setHealthy(false);
     }
   }
 
@@ -228,7 +331,6 @@ export default function App() {
       if (!r.ok) throw new Error();
       const data = (await r.json()) as ETLStatus;
       setEtl(data);
-      // quando termina un job, aggiorna i counts
       if (
         data.pipeline?.status === "ok" ||
         data.overpass?.status === "ok"
@@ -291,13 +393,28 @@ export default function App() {
     }
   }
 
+  function resetFilters() {
+    setFilters({
+      city: "",
+      category: "",
+      geo_label: "",
+      size_class: "",
+      ad_budget: "",
+      is_chain: "any",
+      min_affinity: 0,
+      min_density: 0,
+      min_digital: 0,
+      limit: 50,
+    });
+    setSort(null);
+  }
+
   useEffect(() => {
     fetchHealth();
     fetchCounts();
     fetchEtlStatus();
   }, [apiBase]);
 
-  // ferma il polling se nessun job è running
   useEffect(() => {
     const anyRunning = etl?.overpass?.status === "running" || etl?.pipeline?.status === "running";
     if (anyRunning) startPolling(); else stopPolling();
@@ -309,8 +426,8 @@ export default function App() {
       <div className="max-w-6xl mx-auto p-4 md:p-6 lg:p-8">
         <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6 md:mb-8">
           <div>
-            <h1 className="text-2xl font-bold">CustumerTarget – Mini GUI</h1>
-            <p className="text-sm text-slate-600">Query FastAPI e visualizza gli score.</p>
+            <h1 className="text-2xl font-bold">CustomerTarget · Metriche Brellò</h1>
+            <p className="text-sm text-slate-600">Esplora densità settoriale, affinità al mezzo e presenza digitale arricchite via LLM.</p>
           </div>
           <span className={`inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-full ${healthy ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
             <span className={`w-2 h-2 rounded-full ${healthy ? "bg-emerald-500" : "bg-rose-500"}`} />
@@ -329,7 +446,7 @@ export default function App() {
               />
             </label>
             <label className="flex flex-col text-sm">
-              <span className="mb-1.5 md:mb-2">City (optional)</span>
+              <span className="mb-1.5 md:mb-2">City</span>
               <input
                 className="border rounded px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
                 placeholder="Alatri"
@@ -338,7 +455,7 @@ export default function App() {
               />
             </label>
             <label className="flex flex-col text-sm">
-              <span className="mb-1.5 md:mb-2">Category (optional)</span>
+              <span className="mb-1.5 md:mb-2">Category</span>
               <input
                 className="border rounded px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
                 placeholder="restaurant"
@@ -347,48 +464,126 @@ export default function App() {
               />
             </label>
             <label className="flex flex-col text-sm">
-              <span className="mb-1.5 md:mb-2">Min score</span>
+              <span className="mb-1.5 md:mb-2">Geo label</span>
+              <input
+                className="border rounded px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                placeholder="vicino_brello"
+                value={filters.geo_label}
+                onChange={e => setFilters({ ...filters, geo_label: e.target.value })}
+              />
+            </label>
+            <label className="flex flex-col text-sm">
+              <span className="mb-1.5 md:mb-2">Size class</span>
+              <select
+                className="border rounded px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                value={filters.size_class}
+                onChange={e => setFilters({ ...filters, size_class: e.target.value })}
+              >
+                <option value="">Any</option>
+                <option value="micro">Micro</option>
+                <option value="piccola">Piccola</option>
+                <option value="media">Media</option>
+                <option value="grande">Grande</option>
+              </select>
+            </label>
+            <label className="flex flex-col text-sm">
+              <span className="mb-1.5 md:mb-2">Budget band</span>
+              <select
+                className="border rounded px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                value={filters.ad_budget}
+                onChange={e => setFilters({ ...filters, ad_budget: e.target.value })}
+              >
+                <option value="">Any</option>
+                <option value="basso">Basso</option>
+                <option value="medio">Medio</option>
+                <option value="alto">Alto</option>
+              </select>
+            </label>
+            <label className="flex flex-col text-sm">
+              <span className="mb-1.5 md:mb-2">Catena</span>
+              <select
+                className="border rounded px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                value={filters.is_chain}
+                onChange={e => setFilters({ ...filters, is_chain: e.target.value as ChainFilter })}
+              >
+                <option value="any">Qualsiasi</option>
+                <option value="yes">Solo catene</option>
+                <option value="no">Solo indipendenti</option>
+              </select>
+            </label>
+            <label className="flex flex-col text-sm">
+              <span className="mb-1.5 md:mb-2">Min Affinity (%)</span>
               <input
                 type="number"
-                className="border rounded px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
                 min={0}
                 max={100}
-                value={filters.min_score}
-                onChange={e => setFilters({ ...filters, min_score: Number(e.target.value) })}
+                step={5}
+                className="border rounded px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                value={filters.min_affinity}
+                onChange={e => setFilters({ ...filters, min_affinity: Number(e.target.value) })}
+              />
+            </label>
+            <label className="flex flex-col text-sm">
+              <span className="mb-1.5 md:mb-2">Min Digital (%)</span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={5}
+                className="border rounded px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                value={filters.min_digital}
+                onChange={e => setFilters({ ...filters, min_digital: Number(e.target.value) })}
+              />
+            </label>
+            <label className="flex flex-col text-sm">
+              <span className="mb-1.5 md:mb-2">Min Density (%)</span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={5}
+                className="border rounded px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                value={filters.min_density}
+                onChange={e => setFilters({ ...filters, min_density: Number(e.target.value) })}
               />
             </label>
             <label className="flex flex-col text-sm">
               <span className="mb-1.5 md:mb-2">Limit</span>
               <input
                 type="number"
-                className="border rounded px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
                 min={1}
                 max={200}
+                className="border rounded px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
                 value={filters.limit}
                 onChange={e => setFilters({ ...filters, limit: Number(e.target.value) })}
               />
             </label>
           </div>
-
-          <div className="mt-4 flex flex-wrap gap-3">
+          <div className="mt-4 flex flex-wrap items-center gap-2">
             <button
               onClick={search}
+              className="ui-btn ui-btn-primary"
+              disabled={loading}
+            >
+              {loading ? "Loading..." : "Search"}
+            </button>
+            <button
+              onClick={resetFilters}
               className="ui-btn ui-btn-ghost"
               disabled={loading}
             >
-              Search
-            </button>
-            <button
-              onClick={() => { setFilters({ city: "", category: "", min_score: 0, limit: 50 }); setRows([]); }}
-              className="ui-btn ui-btn-ghost"            >
               Reset
             </button>
-            <span className="mx-2 w-px bg-slate-200" />
+          </div>
+        </section>
+
+        <section className="mb-6 md:mb-8">
+          <div className="flex flex-wrap gap-2">
             <button
               onClick={startOverpass}
               className="ui-btn ui-btn-ghost"
               disabled={etl?.overpass?.status === "running"}
-              title="Esegue l'estrazione da Overpass (OSM)"
+              title="Esegue lo scraper Overpass"
             >
               Run Overpass
             </button>
@@ -500,60 +695,49 @@ export default function App() {
                       {sortIndicator("category")}
                     </button>
                   </th>
+                  <th className="text-left py-3 px-4">
+                    <span>Geo</span>
+                  </th>
                   <th
                     scope="col"
                     className="text-right py-3 px-4"
-                    aria-sort={ariaSort("total_score")}
+                    aria-sort={ariaSort("umbrella_affinity")}
                   >
                     <button
                       type="button"
-                      onClick={() => handleSort("total_score")}
+                      onClick={() => handleSort("umbrella_affinity")}
                       className="flex items-center justify-end gap-1 hover:text-blue-600 focus:outline-none"
                     >
-                      <span>Score</span>
-                      {sortIndicator("total_score")}
+                      <span>Affinità</span>
+                      {sortIndicator("umbrella_affinity")}
                     </button>
                   </th>
                   <th
                     scope="col"
                     className="text-right py-3 px-4"
-                    aria-sort={ariaSort("popularity_score")}
+                    aria-sort={ariaSort("digital_presence")}
                   >
                     <button
                       type="button"
-                      onClick={() => handleSort("popularity_score")}
+                      onClick={() => handleSort("digital_presence")}
                       className="flex items-center justify-end gap-1 hover:text-blue-600 focus:outline-none"
                     >
-                      <span>Popularity</span>
-                      {sortIndicator("popularity_score")}
+                      <span>Digitale</span>
+                      {sortIndicator("digital_presence")}
                     </button>
                   </th>
                   <th
                     scope="col"
                     className="text-right py-3 px-4"
-                    aria-sort={ariaSort("territory_score")}
+                    aria-sort={ariaSort("sector_density_score")}
                   >
                     <button
                       type="button"
-                      onClick={() => handleSort("territory_score")}
+                      onClick={() => handleSort("sector_density_score")}
                       className="flex items-center justify-end gap-1 hover:text-blue-600 focus:outline-none"
                     >
-                      <span>Context</span>
-                      {sortIndicator("territory_score")}
-                    </button>
-                  </th>
-                  <th
-                    scope="col"
-                    className="text-right py-3 px-4"
-                    aria-sort={ariaSort("accessibility_score")}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleSort("accessibility_score")}
-                      className="flex items-center justify-end gap-1 hover:text-blue-600 focus:outline-none"
-                    >
-                      <span>Accessibility</span>
-                      {sortIndicator("accessibility_score")}
+                      <span>Densità</span>
+                      {sortIndicator("sector_density_score")}
                     </button>
                   </th>
                 </tr>

@@ -1,3 +1,11 @@
+CREATE TABLE IF NOT EXISTS place_sector_density (
+  place_id TEXT PRIMARY KEY REFERENCES places_clean(place_id) ON DELETE CASCADE,
+  sector TEXT,
+  neighbor_count INT,
+  density_score NUMERIC,
+  computed_at TIMESTAMP DEFAULT now()
+);
+
 WITH neighbors AS (
   SELECT
     p.place_id,
@@ -10,11 +18,7 @@ WITH neighbors AS (
     ON q.category = p.category
    AND q.place_id <> p.place_id
    AND q.location IS NOT NULL
-   AND ST_DWithin(
-         q.location::geometry,
-         p.location::geometry,
-         500
-       )
+   AND ST_DWithin(q.location, p.location, 500)
   WHERE p.category IS NOT NULL
   GROUP BY p.place_id, p.category
 )

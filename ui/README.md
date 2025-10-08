@@ -1,24 +1,26 @@
-# React + TypeScript + Vite
+# CustomerTarget UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Interfaccia React/Vite che interroga le API FastAPI per visualizzare le metriche Brellò.
 
-Currently, two official plugins are available:
+## Installazione
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+```bash
+cd ui
+npm install
+npm run dev
+```
 
-## React Compiler
+La UI punta di default a `http://127.0.0.1:8000` (modificabile da input in alto).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Flusso dati sintetico
 
-## Expanding the ESLint configuration
+```
+Overpass → osm_business / osm_roads
+          └─ build_places_raw.sql → places_raw
+places_raw └─ normalize_osm.sql → places_clean
+places_clean └─ context_sector_density.sql → place_sector_density
+LLM enrichment ─→ business_facts  ─┐
+feature_builder/build_metrics.py ─┴→ business_metrics
+```
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-## Standard Flow
-Overpass → osm_business  ─┐
-                          ├─> build_places_raw.sql → places_raw
-Overpass → osm_roads   ───┘
-places_raw ── normalize_osm.sql ──> places_clean
-places_clean + osm_roads ── context_*.sql ──> place_context
-places_clean + place_context ── scoring_*.sql ──> company_scores
+L’interfaccia consente filtri su città, categoria, etichetta geografica, dimensione stimata, banda budget e soglie minime per affinità/ digitale / densità, oltre a lanciare gli step ETL direttamente dall’app.

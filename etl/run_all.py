@@ -46,6 +46,7 @@ if __name__ == "__main__":
     base = os.path.join(os.path.dirname(__file__), "sql_blocks")
     steps = [
         # "00_reset_pipeline.sql",
+        "00_setup_brello.sql",
         "build_places_raw.sql",
         "00b_build_osm_poi.sql",
         "normalize_osm.sql",

@@ -1,105 +1,170 @@
-# CustumerTarget — Architettura e Guida al Progetto
+# CustomerTarget · Architettura Aggiornata
 
 ## Obiettivo
 
-CustumerTarget integra dati geospaziali pubblici (OSM/Overpass) e li normalizza in un modello consultabile via API e UI per analisi e scoring di attività/luoghi. Il focus è: importare POI e strade, calcolare contesti/metriche e offrirli a un front‑end veloce per esplorazione.
+CustomerTarget porta in un unico stack i dati geospaziali OSM/Overpass e li arricchisce tramite un micro-servizio LLM per produrre le **metriche Brellò**: densità settoriale, classificazione geografica, dimensione stimata, banda budget pubblicitario, affinità al mezzo “ombrello” e presenza digitale. I vecchi score MVP (popolarità/contesto/accessibilità) sono stati rimossi.
 
-## Panoramica dell'architettura
+## Panoramica
 
-- Database (Docker): PostgreSQL + PostGIS per storage e calcolo geospaziale.
-- ETL (Python + SQL):
-  - `etl/osm_overpass.py`: estrazione POI/strade da Overpass, upsert su tabelle OSM.
-  - `etl/sql_blocks/*.sql`: normalizzazione, contesto e scoring in step idempotenti.
-  - `etl/run_all.py`: orchestration runner per gli script SQL.
-- API (FastAPI): `api/main.py` espone endpoint di health, contatori e ricerca/sort su punteggi.
-- UI (React + Vite): `ui/` interroga l’API e visualizza risultati, filtri e breakdown degli score.
-- Adminer (Docker): console DB per ispezione rapida.
+- **Database**: PostgreSQL + PostGIS (via Docker) custodisce dati raw OSM, normalizzazioni e nuovi fatti/metrice.
+- **ETL base** (`etl/`):
+  - `osm_overpass.py`: estrae POI/strade da Overpass (mirror + retry) e upserta in `osm_business`, `osm_roads`.
+  - `sql_blocks/`: step idempotenti (`build_places_raw`, `normalize_osm`, `context_sector_density`) per popolare `places_raw`, `places_clean`, `place_sector_density`.
+  - `run_all.py`: orchestration runner per gli script SQL.
+- **LLM Enrichment** (`etl/enrich/`): micro-servizio che interroga GPT/Perplexity (via REST) e scrive `enrichment_request/response` + `business_facts` con i campi mancanti (size, catena, budget, affinity, social…). Gestisce hashing input, retry e parsing JSON con Pydantic.
+- **Feature Builder** (`feature_builder/build_metrics.py`): mix Python+SQL che calcola le metriche Brellò e upserta in `business_metrics` (densità settoriale, geo label, affinità, digitale, budget).
+- **API** (`api/main.py`): FastAPI espone health/checks, orchestrazione ETL e nuovo endpoint `/places` filtrabile per city/category/geo/size/budget ecc., basato su `business_metrics` + `business_facts`.
+- **UI** (`ui/src/App.tsx`): mini dashboard React/Vite che mostra le metriche Brellò, filtri avanzati e controlli per lanciare ETL/enrichment. Non esistono più colonne “total/popularity/territory/accessibility”.
 
-## Flusso dati end‑to‑end
+## Data Flow
 
-1) Sorgente OSM (Overpass)
-- `etl/osm_overpass.py` invia query ai mirror Overpass (con retry/backoff).
-- Inserisce/aggiorna: `osm_business` (POI con `location`, `category/subtype`, contatti) e `osm_roads` (strade principali con geometrie).
+1. **OSM ingest**  
+   `etl/osm_overpass.py` → `osm_business`, `osm_roads`
 
-2) Normalizzazione e arricchimento (SQL)
-- `build_places_raw.sql`: popola `places_raw` a partire da `osm_business` (unificazione campi base).
-- `normalize_osm.sql`: scrive in `places_clean` (campi puliti/usabili, flags, location) con upsert.
-- `context_density.sql`: densità entro 500m (conteggio vicini) in `place_context`.
-- `context_poi.sql`: distanza media da POI (centralità) in `place_context`.
-- `scoring_popularity.sql`: calcolo popularità (visibilità su strada + centralità) -> `company_scores`.
-- `scoring_access.sql`: accessibilità (orari + contatti) -> `company_scores`.
-- `scoring_total.sql`: somma pesata nei `total_score`.
+2. **Normalizzazione SQL** (`run_all.py`)  
+   - `build_places_raw.sql` → staging da OSM  
+   - `normalize_osm.sql` → `places_clean` (campi puliti, city, flags)  
+   - `context_sector_density.sql` → `place_sector_density` (conteggio e score di vicini stesso settore a 500 m)
 
-3) Servizio API
-- `GET /health`: ping DB.
-- `GET /counts`: contatori principali (tabelle chiave) per stato pipeline.
-- `GET /places`: filtro opzionale per `city`, `category`, con `min_score` e `limit`. Join su `company_scores` per ordinare per punteggio.
+3. **LLM Enrichment** (`python -m etl.enrich.run_enrichment --limit 200`)  
+   - Seleziona attività senza fatti o scadute (TTL configurabile, default 30 gg).  
+   - Costruisce prompt (nome, categoria, tags) → chiama GPT/Perplexity (via `LLM_PROVIDER`, `OPENAI_API_KEY`/`PERPLEXITY_API_KEY`).  
+   - Valida output in `EnrichedFacts` (Pydantic), salva raw/parsed in `enrichment_response`, upserta consolidato in `business_facts`.
 
-4) UI
-- `ui/src/App.tsx` (React):
-  - Configurazione `API_DEFAULT` (`http://127.0.0.1:8000`).
-  - Pannello filtri, badge di stato API, tabella risultati con breakdown (popularity/territory/accessibility).
-  - Chiama `GET /health`, `GET /counts`, `GET /places`.
+4. **Feature Builder** (`python -m feature_builder.build_metrics`)  
+   - Unisce `places_clean`, `place_sector_density`, `business_facts`, `osm_roads`, `brello_stations`, `geo_zones`.  
+   - Calcola: densità normalizzata, etichetta geografica (`vicino_brello`, `passaggio`, `centro`, …), dimensione stimata, banda budget, affinità (fallback rules), presenza digitale (website/social/marketing attitude), confidenze.  
+   - Upsert finale in `business_metrics`.
 
-## Tecnologie e motivazioni
+5. **API & UI**  
+   - `/counts`: monitora `places_raw`, `places_clean`, `place_sector_density`, `business_facts`, `business_metrics`, `osm_*`, `brello_stations`, `geo_zones`.  
+   - `/places`: filtri `city`, `category`, `geo_label`, `size_class`, `ad_budget`, `is_chain`, soglie minime per `umbrella_affinity`, `digital_presence`, `sector_density_score`. Restituisce record arricchiti.  
+   - UI mostra le metriche in tabella (Affinità, Digitale, Densità) + badge dimensione/budget/catena/confidenza. Controlli per avviare ETL e refresh.
 
-- PostgreSQL + PostGIS: modellazione e query geospaziali (buffer, distanza, within) direttamente in SQL; robusto e standard.
-- Overpass API (OSM): dati POI e viabilità aggiornati e open; uso di mirror + retry per resilienza.
-- Python (requests, psycopg2, dotenv): semplicità di scripting, connessione DB e config `.env` coerente tra servizi.
-- FastAPI + Uvicorn: API performante e tipizzata, autoreload in dev, CORS configurato per UI locale.
-- React + Vite + Tailwind: UI snella per esplorazione rapida; vite dev server e HMR per produttività.
-- Docker Compose: isola lo strato dati (PostGIS) e Adminer; riproducibilità locale.
+## Schema Attuale (estratto)
 
-## Schema dati (estratto)
+- `osm_business(osm_id, name, category, subtype, tags, phone, website, opening_hours, location)`  
+- `osm_roads(osm_id, highway, name, geom)`  
+- `places_raw(...)` → staging  
+- `places_clean(...)` → entità pulite  
+- `place_sector_density(place_id, sector, neighbor_count, density_score, computed_at)`  
+- `brello_stations(station_id, name, geom, metadata)`  
+- `geo_zones(zone_id, label, kind, priority, geom)`  
+- `enrichment_request/response` → tracking job LLM  
+- `business_facts(business_id, size_class, is_chain, website_url, social, marketing_attitude, umbrella_affinity, ad_budget_band, confidence, provenance, source_provider, source_model, …)`  
+- `business_metrics(business_id, sector_density_neighbors, sector_density_score, geo_distribution_label, geo_distribution_source, size_class, is_chain, ad_budget_band, umbrella_affinity, digital_presence, digital_presence_confidence, marketing_attitude, facts_confidence, updated_at)`
 
-- `osm_business(osm_id, name, category, subtype, tags, phone, website, opening_hours, location)`
-- `osm_roads(osm_id, highway, name, geom)`
-- `places_raw(...)` -> staging unificato dei luoghi
-- `places_clean(...)` -> versione normalizzata per consumo applicativo
-- `place_context(density_500m, distance_poi_avg)` -> feature di contesto
-- `company_scores(popularity_score, territory_score, accessibility_score, total_score)`
+Le definizioni sono in `sql/shema.sql` e vengono applicate al bootstrap del container PostGIS (o manualmente via `psql`).
 
-Le definizioni sono inizializzate da `sql/shema.sql` (PostGIS extension inclusa).
+## Runbook
 
-## Come avviare (dev)
+1. **Database + Adminer**  
+   `docker-compose up -d` dalla root.
 
-1) Database + Adminer
-- `docker-compose up -d` dalla root (crea PostGIS + Adminer su `:8080`).
-- Variabili `.env` alla root definiscono utente/DB/host/porta e chiavi esterne (es. Google).
+2. **Estrarre/normalizzare OSM**  
+   ```bash
+   (.venv) python etl/osm_overpass.py
+   (.venv) python etl/run_all.py
+   ```
 
-2) API
-- Da `api/`: attiva venv Python del progetto `etl` o la tua venv attuale.
-- Avvio: `uvicorn main:app --reload --host 0.0.0.0 --port 8000`.
+3. **Enrichment LLM**  
+   ```bash
+   # Configurare .env con LLM_PROVIDER, OPENAI_API_KEY o PERPLEXITY_API_KEY
+   (.venv) python -m etl.enrich.run_enrichment --limit 200
+   ```
 
-3) UI
-- Da `ui/`: `npm run dev` (o `pnpm dev`).
-- L’UI punta per default a `http://127.0.0.1:8000` (modificabile da input in pagina).
+4. **Costruire metriche Brellò**  
+   ```bash
+   (.venv) python -m feature_builder.build_metrics
+   ```
 
-4) ETL
-- Overpass: `python etl/osm_overpass.py` (popola `osm_business` e `osm_roads`).
-- Pipeline SQL: `python etl/run_all.py` (esegue `etl/sql_blocks` in ordine).
+5. **API & UI**  
+   ```bash
+   # API
+   (.venv) uvicorn main:app --reload --host 0.0.0.0 --port 8000  # dalla cartella api/
+   # UI
+   npm install   # se non già fatto
+   npm run dev   # dalla cartella ui/
+   ```
 
-Ordine tipico in locale: avvia DB → esegui `osm_overpass.py` → esegui `run_all.py` → avvia API → avvia UI → esplora risultati.
+Ordine consigliato: DB → `osm_overpass.py` → `run_all.py` → enrichment → feature builder → API/UI.
 
-Nota: nel repository non esiste uno script chiamato "run_overpass"; lo script di estrazione è `etl/osm_overpass.py`.
+## Considerazioni e guardrail
 
-## Considerazioni su qualità e performance
+- **LLM**: output forzato JSON, validato da Pydantic; caching via `input_hash`. In dry-run, lo script logga i prompt senza colpire l’API.  
+- **Metriche**: densità settoriale limitata a 30 vicini (score ∈ [0,1]); affinità fallback su dizionari categoria; digitale combina website/social/marketing attitude con confidenza.  
+- **Geografia**: priorità etichette `vicino_brello` (≤100 m dalle stazioni), poi `passaggio` (≤50 m da strade primarie), poi poligoni `geo_zones`, infine fallback `altro`.  
+- **Roll-back**: tutti gli step sono idempotenti (`ON CONFLICT`) e mantengono cronologia minima via `updated_at`.  
+- **Configurazione**: parametri di throttling LLM (`ENRICHMENT_REQUEST_DELAY`, `ENRICHMENT_TTL_DAYS`, `ENRICHMENT_PROMPT_VERSION`) e logging (`ENRICHMENT_LOG_LEVEL`, `FEATURE_BUILDER_LOG_LEVEL`) via `.env`.
 
-- Resilienza Overpass: uso mirror e status retry (429/5xx), tile del bbox per ridurre timeout e duplicati.
-- Idempotenza SQL: step con `ON CONFLICT` per aggiornamenti incrementali.
-- Geospaziale nel DB: calcoli (buffer/distanza/dwithin) eseguiti in PostGIS per efficienza.
-- CORS in dev: regex `http://(localhost|127.0.0.1):<porta>` per semplicità di sviluppo UI.
+## Estensioni previste
 
-## Estensioni future
+- Validazione manuale dei fatti (`needs_review`) e tool di correzione manuale.  
+- Integrazione di fonti open per digital footprint (es. crawler recensioni).  
+- Scheduler (Celery/Cron) per orchestrare Overpass → SQL → Enrichment → Metrics.  
+- Arricchimento `geo_zones` e `brello_stations` con layer ufficiali.  
+- Endpoints FastAPI dedicati a costi/token e audit dell’enrichment.
 
-- Scheduling ETL (es. cron/worker), logging strutturato e metriche.
-- Inserimento di ulteriori sorgenti (es. Google Places via `etl/google_places.py`).
-- Enrichment anagrafico (collegamento a `istat_comuni`, popolazione, turismo) e mappe in UI.
-- Contenitori separati per API/UI in compose per sviluppo full‑docker.
+## Metriche Brello - dettaglio calcolo
 
-## Troubleshooting rapido
+### Densità settoriale
+- Fonte: `context_sector_density.sql`.
+- Logica: conta i POI con stessa `category` entro 500 m (`ST_DWithin`).  
+  - `sector_density_neighbors` = numero di vicini (escluso il soggetto).  
+  - `sector_density_score` = `LEAST(neighbor_count / 30.0, 1.0)` per normalizzare 0..1 con tetto a 30.
 
-- DB vuoto: verifica `sql/shema.sql` applicato (viene caricato automaticamente da Docker al primo avvio) e `.env`.
-- Overpass lento: riduci bbox o aumenta splitting in `split_bbox`, verifica mirror e backoff.
-- UI non vede l’API: controlla CORS e `API base URL` nella UI; verifica `GET /health`.
+### Distribuzione geografica
+- Valutata in `feature_builder.compute_geo_distribution`.
+- Regole in ordine di priorità:
+  1. `vicino_brello` se `ST_Distance` da una stazione Brellò ≤ 100 m.
+  2. `passaggio` se esiste strada primaria (`highway` ∈ {motorway,trunk,primary,secondary,tertiary}) entro 50 m.
+  3. `geo_zones` se il punto ricade in un poligono (usa `label` e `kind` con ordinamento per `priority`).
+  4. Fallback `altro`.  
+- Il campo `geo_distribution_source` traccia la regola scattata.
 
+### Dimensione stimata (`size_class`)
+- Preferisce il valore LLM (`business_facts.size_class`).
+- Se assente, applica regole:
+  - catene (`is_chain=True`) → minimo `media`.
+  - `supermarket`, `hypermarket`, `shopping_centre` → `grande`.
+  - `gym`, `fitness_centre`, `car_dealer` → `media`.
+  - food & beverage (`restaurant`, `pizzeria`, `bar`, `cafe`, `gelateria`, `fast_food`) → `piccola`.
+  - servizi di quartiere (`pharmacy`, `hairdresser`, `beauty_salon`, `optician`) → `piccola`.
+  - professionisti (`lawyer`, `notary`, `accountant`) → `micro`.
+  - default → `micro`.
+
+### Banda budget pubblicitario (`ad_budget_band`)
+- Se il modello restituisce la banda, viene usata e marcata con `budget_source = 'LLM_infer'`.
+- Altrimenti combina dimensione e categoria:
+  - Mappa base dimensione → {`micro`: basso, `piccola`: medio, `media`: medio, `grande`: alto}.
+  - Eccezioni: professionisti massimo medio/basso; grande distribuzione sempre alto; food retail almeno medio.
+
+### Affinità al mezzo Brellò (`umbrella_affinity`)
+- Valore LLM (0..1) quando disponibile.
+- Fallback da dizionario `AFFINITY_RULES`:
+  - Food & beverage ~0.85–0.9; retail moda/beauty 0.7; servizi professionali 0.3–0.4; officine 0.2; default 0.5.
+- UI mostra badge percentuale e la query può filtrare con `min_affinity`.
+
+### Presenza digitale (`digital_presence`)
+- Calcolata in `compute_digital_presence` combinando:
+  - +0.4 se esiste sito (`has_website` o `business_facts.website_url`).
+  - + fino a 0.4 per social verificati (`len(social)` limitato a 3 piattaforme).
+  - + fino a 0.2 per `marketing_attitude` (0..1).  
+- Il punteggio è clampato 0..1.
+- `digital_presence_confidence` parte da `business_facts.confidence` (o 0.4) e migliora di +0.1 per sito e +0.1 per social (cap 1.0).
+
+### Marketing attitude & confidence
+- `business_metrics.marketing_attitude` replica il valore LLM (proxy 0..1).
+- `business_metrics.facts_confidence` riprende `business_facts.confidence` per pesare affidabilità del dato.
+
+### Aggiornamento tabelle
+- `feature_builder.build_metrics` usa `INSERT ... ON CONFLICT` per mantenere le metriche aggiornate e imposta `updated_at = now()` su ogni run.
+- `business_facts` viene aggiornato dall’enrichment (LLM) con metadata `source_provider`/`source_model`.
+
+## Troubleshooting
+
+- **Nessun dato in UI**: assicurarsi che `business_metrics` sia popolata (`python -m feature_builder.build_metrics`) e che `/places` sia raggiungibile (`curl`).  
+- **Enrichment bloccato**: verificare `LLM_PROVIDER` e API key; controllare `enrichment_request.status='error'` per messaggi dal provider.  
+- **Geo label sempre “altro”**: popolari `brello_stations`/`geo_zones` e lanciare di nuovo `feature_builder`.  
+- **Overpass lento**: restringere BBOX in `osm_overpass.py` o aumentare splitting (`split_bbox`).  
+- **UI offline**: controllare CORS dell’API (`allow_origin_regex`) e `API base URL` nella dashboard.
