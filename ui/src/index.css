@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---- Hard reset minimale per non litigare con Tailwind ---- */
+:root { color-scheme: light; }            /* niente dark auto */
+html, body, #root { height: 100%; }
+* { box-sizing: border-box; }
+
+/* Body pulito: niente padding, niente centering forzato */
+body {
+  margin: 0;
+  background: #ffffff;
+  color: rgb(15 23 42); /* slate-900 */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Facoltativo: micro-stili coerenti con ciò che già usi nelle classi */
+@layer base {
+  h1 { @apply text-2xl md:text-3xl font-bold; }
+}
+
+@layer components {
+  /* Input “neutri” usati nel form (se vuoi riutilizzarli con className="ui-input") */
+  .ui-input { @apply border rounded px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-200; }
+  .ui-btn    { @apply px-4 py-2.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50; }
+  .ui-btn-ghost { @apply px-4 py-2.5 rounded bg-slate-200 hover:bg-slate-300; }
+
+  /* Tabella */
+  .ui-table { @apply min-w-full text-sm; }
+  .ui-thead { @apply bg-slate-50 border-b; }
+  .ui-th    { @apply text-left py-3 px-4 font-semibold text-slate-700; }
+  .ui-td    { @apply py-3.5 px-4; }
+}
+
+/* Rimuovi roba del template Vite (logo, card, ecc.) */
+
+
+/* Centra verticalmente e orizzontalmente le celle */
+table th,
+table td {
+  vertical-align: middle;
+  text-align: center;
+}
+
+/* Mantieni la prima colonna (Name) e l'ultima (Breakdown) leggermente più leggibili */
+table th:first-child,
+table td:first-child {
+  text-align: left;
+}
+
+table th:last-child,
+table td:last-child {
+  text-align: center;
+}
+
+/* Riduci il padding per un look più compatto */
+table th, table td {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+
+/* Migliora la leggibilità della riga */
+table tr:hover {
+  background-color: #f8fafc; /* slate-50 */
+}
+/* Tabella più armoniosa */
+table {
+  border-spacing: 0;
+  border-collapse: separate;
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
+thead th {
+  background-color: #f1f5f9; /* slate-100 */
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
