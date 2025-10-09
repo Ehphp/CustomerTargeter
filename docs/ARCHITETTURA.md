@@ -2,14 +2,14 @@
 
 ## Obiettivo
 
-CustomerTarget porta in un unico stack i dati geospaziali OSM/Overpass e li arricchisce tramite un micro-servizio LLM per produrre le **metriche Brellò**: densità settoriale, classificazione geografica, dimensione stimata, banda budget pubblicitario, affinità al mezzo “ombrello” e presenza digitale. I vecchi score MVP (popolarità/contesto/accessibilità) sono stati rimossi.
+CustomerTarget porta in un unico stack i dati provenienti da Google Places e li arricchisce tramite un micro-servizio LLM per produrre le **metriche Brellò**: densità settoriale, classificazione geografica, dimensione stimata, banda budget pubblicitario, affinità al mezzo “ombrello” e presenza digitale. I vecchi score MVP (popolarità/contesto/accessibilità) sono stati rimossi.
 
 ## Panoramica
 
 - **Database**: PostgreSQL + PostGIS (via Docker) custodisce dati raw OSM, normalizzazioni e nuovi fatti/metrice.
 - **ETL base** (`etl/`):
-  - `osm_overpass.py`: estrae POI/strade da Overpass (mirror + retry) e upserta in `osm_business`, `osm_roads`.
-  - `sql_blocks/`: step idempotenti (`build_places_raw`, `normalize_osm`, `context_sector_density`) per popolare `places_raw`, `places_clean`, `place_sector_density`.
+  - `google_places.py`: interroga Google Places (Text Search + Details) e popola `places_raw`.
+  - `sql_blocks/`: step idempotenti (`normalize_places`, `context_sector_density`) per costruire `places_clean` e `place_sector_density` a partire da `places_raw`.
   - `run_all.py`: orchestration runner per gli script SQL.
 - **LLM Enrichment** (`etl/enrich/`): micro-servizio che interroga GPT/Perplexity (via REST) e scrive `enrichment_request/response` + `business_facts` con i campi mancanti (size, catena, budget, affinity, social…). Gestisce hashing input, retry e parsing JSON con Pydantic.
 - **Feature Builder** (`feature_builder/build_metrics.py`): mix Python+SQL che calcola le metriche Brellò e upserta in `business_metrics` (densità settoriale, geo label, affinità, digitale, budget).
@@ -22,7 +22,7 @@ CustomerTarget porta in un unico stack i dati geospaziali OSM/Overpass e li arri
    `etl/osm_overpass.py` → `osm_business`, `osm_roads`
 
 2. **Normalizzazione SQL** (`run_all.py`)  
-   - `build_places_raw.sql` → staging da OSM  
+   - `normalize_places.sql` → normalizzazione dei record Google → `places_clean`  
    - `normalize_osm.sql` → `places_clean` (campi puliti, city, flags)  
    - `context_sector_density.sql` → `place_sector_density` (conteggio e score di vicini stesso settore a 500 m)
 

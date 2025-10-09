@@ -2,27 +2,26 @@
 
 ## Struttura del prompt inviato
 - Il prompt è costruito da `build_prompt` (`etl/enrich/prompts.py`) ogni volta che il runner deve arricchire un'attività.
-- Contiene un contesto iniziale che istruisce l'LLM a comportarsi come analista marketing locale e a produrre **solo** un JSON valido.
-- Sezione `Attività`: riporta `name`, `category`, `address`, `city`, coordinate lat/lon, bounding box e ulteriori dettagli opzionali (indirizzo formattato, tipologia/subtype OSM, tags categoria, presenza di sito/telefono, CAP/provincia/regione dai tag, cucina dichiarata, brand, note dal dataset, raggio stimato).
-- Regole operative: includono il vincolo sul raggio dalle coordinate (default 200 m, configurabile via `ENRICHMENT_SEARCH_RADIUS_M`), richiedono di motivare eventuali discrepanze in `provenance.reasoning`, di elencare fonti attendibili in `provenance.citations`, e ribadiscono i vincoli su campi e formato.
-- Chiusura con uno **schema esempio** (configurabile via `include_schema`) che offre all'LLM una traccia di output atteso; lo schema è serializzato in JSON con caratteri non ASCII abilitati per mantenere glifi italiani.
+- Contiene un contesto iniziale che istruisce l'LLM a comportarsi come analista marketing locale e a produrre **solo** JSON valido.
+- Sezione `Attività`: riporta `name`, `category`, `address`, `city`, coordinate lat/lon, bounding box (~200 m) e ulteriori dettagli opzionali (indirizzo formattato, tipologia/subtype dai `types` di Google, presenza sito/telefono, note, ecc.).
+- Le regole operative:
+  - Impongono il rispetto delle coordinate/bounding box (configurabile via `ENRICHMENT_SEARCH_RADIUS_M`).
+  - Chiedono di motivare eventuali discrepanze in `provenance.reasoning` e di elencare le fonti in `provenance.citations`.
+  - Indicano esplicitamente di lasciare a `null` i campi dimensionali/metrici (`size_class`, `is_chain`, `marketing_attitude`, `umbrella_affinity`, `ad_budget_band`, `confidence`), che vengono calcolati downstream tramite `common/business_rules.py`.
+- Il prompt si chiude con uno **schema esempio** serializzato in JSON (opzione `include_schema`).
 
 ## Risposta attesa e parsing
-- L'LLM deve restituire **un singolo oggetto JSON** (nessun testo extra); in dry-run mostriamo solo un estratto del prompt nei log per evitare rumore.
-- Il payload viene caricato in `parse_enriched_facts` (`etl/enrich/schema.py`), che:
-  - Rimuove eventuali fence Markdown ```json.
-  - Normalizza URL come `website_url` e le voci della mappa `social` (prefisso https se assente).
-  - Valida il risultato con il modello `EnrichedFacts` (campo opzionale di default `None`, range clampato 0..1 per punteggi).
-  - In caso di errore logga uno snippet della risposta e marca la richiesta come `error` nella tabella `enrichment_request`.
+- L'LLM deve restituire **un singolo oggetto JSON** (nessun testo extra).
+- `parse_enriched_facts` (`etl/enrich/schema.py`) rimuove eventuali fence ```json, normalizza URL e valida il payload con il modello `EnrichedFacts`.
+- In caso di errore la richiesta viene marcata `error` in `enrichment_request` e il log mostra uno snippet della risposta.
 
 ## Integrazione nel progetto
-1. `python -m etl.enrich.run_enrichment` carica `.env`, crea il client LLM attraverso `load_client_from_env` e istanzia `EnrichmentRunner` (`etl/enrich/run_enrichment.py`).
-2. Il runner seleziona i candidate business dal database (`_fetch_candidates`) usando `psycopg2`, rispettando TTL o flag `--force`.
-3. Per ogni attività:
-   - Inserisce/aggiorna `enrichment_request` con stato `running` e memorizza l'`input_payload` (prompt + dati di contesto).
-   - Costruisce il prompt e chiama l'LLM (`LLMClient.complete`). Ritardi tra chiamate regolati da `ENRICHMENT_REQUEST_DELAY`.
-   - Salva la risposta grezza e il JSON validato in `enrichment_response`; aggiorna `business_facts` con i valori arricchiti e metadati (`provider`, `source_model`, `confidence`).
-4. Lo script `feature_builder/build_metrics.py` usa `business_facts` per combinare i dati arricchiti con densità, zone e altri segnali, producendo `business_metrics` (size, budget, affinità, presenza digitale, ecc.).
-5. L'API FastAPI (`api/main.py`) espone gli score via `/places`, e la UI (`ui/src/App.tsx`) li rende filtrabili mostrando i badge delle metriche Brellò.
+1. `python -m etl.enrich.run_enrichment` carica `.env`, seleziona i candidati (rispettando TTL o flag `--force`) e costruisce il prompt.
+2. Il client LLM (OpenAI o Perplexity) è scelto da `load_client_from_env`.
+3. La risposta validata viene:
+   - Salvata in `enrichment_response` (raw JSON + parsed JSON + usage).
+   - Upsertata in `business_facts` insieme a provider/modello.
+4. `feature_builder/build_metrics.py` combina `business_facts` con le regole di `common/business_rules.py` per calcolare le metriche deterministiche (dimensione, catena, budget, affinity, confidence) e popolare `business_metrics`.
+5. L'API FastAPI (`api/main.py`) espone i dati via `/places`, e la UI (`ui/src/App.tsx`) li mostra con i filtri.
 
-> Per verificare se il sistema chiama realmente GPT/Perplexity, controlla `LLM_PROVIDER` e le rispettive API key nel `.env`. Con un client attivo vedrai record in `enrichment_request/response` con `provider` valorizzato e log `Enrichment progress …` senza tag `[dry-run]`.
+> Per verificare se l'LLM è stato realmente chiamato controlla `enrichment_request`/`enrichment_response` (provider valorizzato, log `Enrichment progress ...`). Use `--dry-run` per vedere solo i prompt senza chiamare il provider.

@@ -17,6 +17,7 @@ from psycopg2.extras import Json, RealDictCursor
 from .client import CompletionResult, LLMClient, LLMError
 from .prompts import build_prompt
 from .schema import EnrichedFacts, parse_enriched_facts
+from common.business_rules import compute_business_facts
 
 logger = logging.getLogger(__name__)
 
@@ -438,7 +439,7 @@ class EnrichmentRunner:
 
         with conn.cursor() as cur:
             self._store_response(cur, request_id, result, facts)
-            self._upsert_business_facts(cur, business.place_id, provider, result, facts)
+            self._upsert_business_facts(cur, business, provider, result, facts)
             self._mark_request_complete(cur, request_id)
 
     def _upsert_request(
@@ -505,12 +506,27 @@ class EnrichmentRunner:
     def _upsert_business_facts(
         self,
         cur: psycopg2.extensions.cursor,
-        business_id: str,
+        business: BusinessRow,
         provider: str,
         result: CompletionResult,
         facts: EnrichedFacts,
     ) -> None:
+        business_id = business.place_id
         facts_json = facts.model_dump(mode="json")
+        overrides = compute_business_facts(
+            name=business.name,
+            category=business.category,
+            osm_category=business.osm_category,
+            osm_subtype=business.osm_subtype,
+            tags=business.tags if isinstance(business.tags, Mapping) else None,
+            has_website=business.has_website or bool(facts_json.get("website_url")),
+            has_phone=business.has_phone,
+            hours_weekly=business.hours_weekly,
+            existing=facts_json,
+        )
+        for key, value in overrides.items():
+            if value is not None and (facts_json.get(key) in (None, "")):
+                facts_json[key] = value
         social = facts_json.get("social")
         cur.execute(
             """

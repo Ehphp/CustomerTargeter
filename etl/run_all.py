@@ -47,9 +47,7 @@ if __name__ == "__main__":
     steps = [
         # "00_reset_pipeline.sql",
         "00_setup_brello.sql",
-        "build_places_raw.sql",
-        "00b_build_osm_poi.sql",
-        "normalize_osm.sql",
+        "normalize_places.sql",
         "context_sector_density.sql",
     ]
     logger.info("Launching ETL pipeline with %d steps", len(steps))

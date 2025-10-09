@@ -6,17 +6,17 @@ from textwrap import dedent
 from typing import Any, Mapping, Optional
 
 SCHEMA_EXAMPLE = {
-    "size_class": "piccola",
-    "is_chain": False,
+    "size_class": None,
+    "is_chain": None,
     "website_url": "https://www.esempio.it",
     "social": {
         "instagram": "https://www.instagram.com/esempio",
         "facebook": "https://www.facebook.com/esempio",
     },
-    "marketing_attitude": 0.7,
-    "umbrella_affinity": 0.9,
-    "ad_budget_band": "medio",
-    "confidence": 0.72,
+    "marketing_attitude": None,
+    "umbrella_affinity": None,
+    "ad_budget_band": None,
+    "confidence": None,
     "provenance": {
         "reasoning": "Locale indipendente con forte presenza turistica.",
         "citations": [
@@ -156,9 +156,7 @@ def build_prompt(business: Mapping[str, Any], include_schema: bool = True) -> st
         - Lavora SOLO su risultati entro il raggio indicato dalle coordinate: se le fonti portano fuori area o in un comune diverso, lascia i campi stimati a null, imposta "confidence" <= 0.25 e descrivi il problema in "provenance.reasoning".
         - Confronta CAP, provincia e regione nei dettagli con le fonti trovate: eventuali discrepanze vanno motivate in "provenance.reasoning".
         - Riporta le fonti principali (URL) in "provenance.citations" quando disponibili, privilegiando siti istituzionali o elenchi ufficiali italiani.
-        - "size_class": micro, piccola, media o grande considerando il contesto italiano.
-        - "umbrella_affinity": punteggio 0..1 su quanto un ombrello brandizzato Brello e coerente con il target.
-        - "ad_budget_band": stima prudente (basso, medio, alto) basata su categoria e dimensione.
+        - Non calcolare size_class, is_chain, marketing_attitude, umbrella_affinity, ad_budget_band o confidence: restituisci sempre null (saranno calcolati downstream).
         - "social": mappa piattaforma->URL solo se plausibile.
         - "provenance": motivazione sintetica o fonti sicure.
 

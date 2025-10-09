@@ -1,132 +1,111 @@
 # Flusso Operativo End-to-End
 
-Questo documento riassume l'intero ciclo dati di CustomerTarget, dalla raccolta OSM fino alla visualizzazione delle metriche Brellé in UI. Mantiene le istruzioni in ordine cronologico e richiama i componenti coinvolti a ogni passo.
+Questo documento riassume l'intero ciclo dati di CustomerTarget, dalla raccolta tramite Google Places fino alla visualizzazione delle metriche Brello nella UI.
 
 ## 0. Prerequisiti
-- **Ambiente Python**: attiva `.\.venv\Scripts\activate` (oppure crea una nuova venv e installa `requirements/`).
+- **Ambiente Python**: attiva `.venv\Scripts\activate` (oppure crea una nuova venv e installa `requirements/`).
 - **Variabili `.env`** (root del repo):
   - Parametri Postgres (`POSTGRES_*`).
-  - Credenziali Overpass/Google se disponibili (`GOOGLE_PLACES_API_KEY`).
+  - `GOOGLE_PLACES_API_KEY` per la sorgente principale dei punti vendita.
   - Parametri prompt: `ENRICHMENT_PROMPT_VERSION` (default 2) e `ENRICHMENT_SEARCH_RADIUS_M` (default 200 m).
-  - Per l'arricchimento: `LLM_PROVIDER` + `OPENAI_API_KEY` oppure `PERPLEXITY_API_KEY`, opzionalmente `LLM_MODEL`.
+  - Credenziali LLM: `LLM_PROVIDER` + `OPENAI_API_KEY` oppure `PERPLEXITY_API_KEY`, opzionalmente `LLM_MODEL`.
 
-## 1. Ingest OSM
+## 1. Ingest Google Places
+```powershell
+(.venv) python -m etl.google_places --location "Alatri, Italia" --queries ristorante bar negozio --limit 200
 ```
-(.venv) python etl/osm_overpass.py
-```
-- Splitta la bounding box configurata e interroga Overpass con retry.
-- Scrive/aggiorna `osm_business` e `osm_roads`.
-- Log progressivo: tile scaricati, deduplice, conteggio finale di POI e strade.
+- Esegue la Text Search API di Google Places e upserta i risultati in `places_raw`.
+- Puoi indicare le query da CLI (`--queries`) oppure da file (`--queries-file`).
+- `--location "Nome città"` usa il geocoding Google per ottenere lat/lon e bounding box; volendo puoi ancora passare manualmente `--lat`/`--lng`.
+- `--radius` è facoltativo: se omesso viene usato il raggio stimato dal geocoding (minimo 3000 m); se presente, il codice prende il max tra il tuo valore e quello calcolato. `--limit` aiuta a controllare i costi.
 
 ## 2. Pipeline SQL di normalizzazione
-```
+```powershell
 (.venv) python etl/run_all.py
 ```
 Esegue in sequenza gli step di `etl/sql_blocks/`:
-1. `build_places_raw.sql` → staging `places_raw` (merge OSM + eventuali API terze).
-2. `normalize_osm.sql` → `places_clean` con indirizzo ripulito, città stimata, flag phone/website.
-3. `context_sector_density.sql` → `place_sector_density` (conteggio vicini e score densità).
+1. `00_setup_brello.sql` → garantisce la presenza delle tabelle di supporto.
+2. `normalize_places.sql` → normalizza `places_raw` in `places_clean`, stimando la città con `formatted_address` + `istat_comuni` e impostando i flag phone/website.
+3. `context_sector_density.sql` → calcola `place_sector_density` (conteggio vicini e score densità).
 
 > Output atteso dopo questa fase (verificabile da UI > counts o via SQL):  
 > `places_raw` > 0, `places_clean` > 0, `place_sector_density` > 0.
 
 ## 3. Enrichment LLM
-```
+```powershell
 (.venv) python -m etl.enrich.run_enrichment --limit 100
 ```
 - Seleziona i business senza fatti recenti (`business_facts` vuoto o `updated_at` oltre TTL).
-- Costruisce il prompt con `build_prompt` includendo:
-  - Nome, categoria, tags OSM, flag phone/website.
-  - Indirizzo/città risolti: combina `places_clean.address`, `formatted_address`, `tags addr:*` e, se serve, un fallback geospaziale su `istat_comuni`.
-  - Coordinate e bounding box (~200 m, configurabili con `ENRICHMENT_SEARCH_RADIUS_M`) che devono essere rispettati: se la posizione trovata è fuori area il modello deve lasciare i campi a null e abbassare `confidence`, spiegando il motivo in `provenance.reasoning`.
-- Il versioning del prompt è gestito da ENRICHMENT_PROMPT_VERSION (default 2): incrementalo quando modifichi il prompt per forzare un nuovo enrichment sulle attività esistenti.
-- Chiama l’LLM tramite `load_client_from_env` (`OpenAIChatClient` o `PerplexityClient`).
-- Valida l’output JSON con `EnrichedFacts` (`etl/enrich/schema.py`); se valido:
-  - Aggiorna `enrichment_request`/`enrichment_response`.
-  - Upserta `business_facts` (size_class, is_chain, budget, affinity, presenza digitale, confidenza, metadati provider/modello).
+- Costruisce il prompt con `build_prompt`, includendo nome, categoria, coordinate, bounding box (~200 m) e altri metadati.
+- **Importante**: le istruzioni chiedono all'LLM di restituire solo dati fattuali. I campi metrici (`size_class`, `is_chain`, `marketing_attitude`, `umbrella_affinity`, `ad_budget_band`, `confidence`) devono restare `null`: vengono calcolati internamente tramite le regole deterministiche.
+- `ENRICHMENT_PROMPT_VERSION` (default 2) controlla il versioning: aumenta il valore quando modifichi prompt o logica per forzare un nuovo enrichment sui record esistenti.
+- Il client LLM (OpenAI/Perplexity) è scelto da `load_client_from_env`. Le risposte valide sono salvate in `business_facts` e `enrichment_response`.
 
 Controlli consigliati:
 - UI > badge `business_facts` oppure `SELECT COUNT(*) FROM business_facts`.
 - `SELECT status, COUNT(*) FROM enrichment_request GROUP BY status` per eventuali errori.
 
-## 4. Feature Builder (metriche Brellé)
-```
+## 4. Feature Builder (metriche Brello)
+```powershell
 (.venv) python -m feature_builder.build_metrics
 ```
-Aggrega le sorgenti principali:
-- `places_clean`, `place_sector_density`.
-- `business_facts` (output LLM).
-- Dati contestuali (`osm_roads`, `brello_stations`, `geo_zones`).
-
-E calcola:
-- `sector_density_score / neighbors`.
-- `geo_distribution_label` + source.
-- Dimensione e budget (usando LLM o fallback rule-based).
-- `umbrella_affinity`, `digital_presence` (blend sito, social, marketing), `marketing_attitude`.
-- `facts_confidence` (dalla confidenza LLM, con boost per sito/social).
-
-Risultato finale in `business_metrics` (upsert con `ON CONFLICT`). Verifica: `SELECT COUNT(*) FROM business_metrics`.
+- Aggrega `places_clean`, `place_sector_density`, `business_facts`, `brello_stations` e le eventuali `geo_zones`.
+- Applica le funzioni di `common/business_rules.py` per stimare `size_class`, `is_chain`, `ad_budget_band`, `umbrella_affinity`, `marketing_attitude` e `confidence` in modo deterministico (se l'LLM li ha lasciati `null`).
+- Calcola `digital_presence`, `geo_distribution_label` e upserta tutto in `business_metrics`.
 
 ## 4-bis. Automazione Enrichment + Metriche
-```
+```powershell
 (.venv) python -m automation.auto_refresh [--dry-run]
 ```
-- Carica `.env`, controlla il database e verifica se ci sono business oltre il TTL (`ENRICHMENT_TTL_DAYS`, default 30) o senza `business_facts`.
-- Esegue automaticamente `python -m etl.enrich.run_enrichment --limit 100` (limite personalizzabile con `--enrich-limit` oppure variabile `AUTO_REFRESH_ENRICH_LIMIT`).
-- Interroga Postgres e manda al LLM solo i business privi di `business_facts` oppure con un `updated_at` oltre il TTL (a meno di usare `--force-enrichment`).
-- Lancia `python -m feature_builder.build_metrics` subito dopo l'enrichment (anche se non c'erano record mancanti puoi forzare con `--always-run-metrics`).
-- Usa `--dry-run` per vedere il report senza avviare i job; `--force-enrichment` ignora il TTL ma aggiorna comunque le metriche.
-- L'arricchimento viene eseguito a batch: `--enrich-limit` (o `AUTO_REFRESH_ENRICH_LIMIT`) definisce la dimensione di ogni chunk, che viene ripetuto finché restano candidati o fino a `AUTO_REFRESH_MAX_ENRICH_BATCHES`. Con `--metrics-each-batch` (o `AUTO_REFRESH_METRICS_EACH_BATCH=1`) il builder delle metriche parte dopo ogni batch invece di attendere la fine di tutto il giro.
-- Se auto_refresh segnala 'data is within TTL', usa --force-enrichment (o abbassa ENRICHMENT_TTL_DAYS/--enrich-ttl-days) per forzare un nuovo giro; --always-run-metrics e --metrics-each-batch forzano il calcolo delle metriche anche senza enrichment.
+- Analizza il DB: se ci sono record oltre TTL o mancanti, lancia enrichment e `build_metrics`.
+- Parametri utili: `--force-enrichment`, `--enrich-limit`, `--max-enrich-batches`, `--metrics-each-batch`, `--always-run-metrics`.
+- Se il log riporta “data is within TTL”, usa `--force-enrichment` (o abbassa `ENRICHMENT_TTL_DAYS` / `--enrich-ttl-days`) per forzare un nuovo giro; `--always-run-metrics`/`--metrics-each-batch` obbligano il ricalcolo delle metriche.
 
 ## 5. API FastAPI
-```
+```powershell
 (.venv) uvicorn api.main:app --reload
 ```
 Endpoint principali:
-- `GET /health` → connessione DB.
-- `GET /counts` → riepilogo tabelle chiave (UI lo usa per i badge).
-- `POST /etl/overpass/start`, `/etl/pipeline/start` → lanciano thread che richiamano i comandi Python sopra.
-- `GET /etl/status` → stato dei job (polling ogni 3s in UI).
-- `GET /places` → join `places_clean` + `business_metrics` + `business_facts` con filtri per city/category/geo/size/budget/catena + minimi per affinity/digital/density.
-
-> Se `business_metrics` è vuota, `/places` restituisce array vuoto anche con `places_clean` popolata.
+- `GET /health` → check connessione DB.
+- `GET /counts` → riepilogo tabelle chiave (usato per i badge UI).
+- `POST /etl/pipeline/start`, `POST /automation/auto_refresh/start` → avviano i job ETL/auto-refresh in thread.
+- `GET /places` → join `places_clean` + `business_metrics` + `business_facts` con filtri su città/categoria/geo/size/budget/catena e soglie minime.
 
 ## 6. UI Dashboard
-```
+```bash
 cd ui
-npm install (una tantum)
+npm install   # solo la prima volta
 npm run dev
 ```
-Funzionalità:
+Funzionalità principali:
 - Campo `API base URL` (default `http://127.0.0.1:8000`).
 - Filtri avanzati sui campi `/places`.
-- Bottoni `Run Overpass`, `Run Pipeline`, `Refresh Status`.
+- Bottoni `Run Pipeline`, `Run Auto Refresh`, `Refresh Status`.
 - Tabella con badge Affinità / Digitale / Densità e metadati business.
-- Messaggi d’errore se fetch falliscono; polling su job ETL finché status `running`.
 
 ## 7. Sequenza consigliata per un load completo
 1. `docker-compose up -d`
-2. `python etl/osm_overpass.py`
+2. `python -m etl.google_places --location "Città..." --queries ...`
 3. `python etl/run_all.py`
-4. (Facoltativo ma raccomandato) Controllo counts via UI o SQL.
-5. `python -m etl.enrich.run_enrichment --limit 100` (ripetibile, TTL 30gg).
+4. (Facoltativo ma consigliato) verifica counts via UI o SQL.
+5. `python -m etl.enrich.run_enrichment --limit 100`
 6. `python -m feature_builder.build_metrics`
-7. Avvia `uvicorn` e `npm run dev`, poi “Search” in UI.
+7. Avvia `uvicorn` e `npm run dev`, poi usa “Search” in UI.
 
 ## 8. Verifiche e troubleshooting rapidi
 - `SELECT COUNT(*) FROM business_facts` > 0 e `business_metrics` > 0 dopo gli step 3-4.
-- `SELECT status, COUNT(*) FROM enrichment_request GROUP BY status` → eventuali fallimenti con relativo messaggio in `error`.
-- `SELECT COUNT(*) FROM place_sector_density WHERE density_score IS NULL` → indica se la normalizzazione ha prodotto metriche.
-- Nessun dato in UI → quasi sempre `business_metrics` vuota o API offline (badge rosso in UI). Rilancia step 4 oppure controlla `/health`.
-- Problemi di city/address nel prompt → il nuovo resolver (`BusinessRow`) usa fallback su `tags addr:*` e `istat_comuni`; assicurati che `normalize_osm.sql` sia stato eseguito e che `istat_comuni` sia presente.
+- `SELECT status, COUNT(*) FROM enrichment_request GROUP BY status` → eventuali fallimenti con relativo messaggio.
+- `SELECT COUNT(*) FROM place_sector_density WHERE density_score IS NULL` → normalizzazione ok?
+- Nessun dato in UI? Spesso `business_metrics` è vuota o l’API è offline (badge rosso). Rilancia step 4 o controlla `/health`.
+- Problemi di city/address nel prompt? Assicurati che `normalize_places.sql` sia stato eseguito e che `istat_comuni` sia presente.
 
 ## 9. Componenti e tabelle (produttori → consumatori)
-- `etl/osm_overpass.py` → `osm_business`, `osm_roads`.
-- `etl/sql_blocks/*.sql` → `places_raw`, `places_clean`, `place_sector_density`.
+- `etl/google_places.py` → `places_raw`.
+- `etl/sql_blocks/normalize_places.sql` → `places_clean`.
+- `etl/sql_blocks/context_sector_density.sql` → `place_sector_density`.
 - `etl/enrich/run_enrichment.py` → `enrichment_request`, `enrichment_response`, `business_facts`.
 - `feature_builder/build_metrics.py` → `business_metrics`.
-- `api/main.py` → `/counts`, `/places`, job ETL.
+- `api/main.py` → `/counts`, `/places`, job ETL/auto-refresh.
 - `ui/src/App.tsx` → interfaccia utente, filtri e controlli.
 
-Seguendo questo flusso, la tabella della UI mostrerà le metriche Brellé arricchite per ogni attività rilevata via OSM.
+Seguendo questo flusso, la UI mostrerà le metriche Brello aggiornate per ogni attività rilevata tramite Google Places.

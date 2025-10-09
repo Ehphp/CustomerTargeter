@@ -9,40 +9,11 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import psycopg2
 from dotenv import load_dotenv
+from common.business_rules import compute_business_facts
 from psycopg2.extras import RealDictCursor, execute_values
 
 logger = logging.getLogger("feature_builder")
 
-
-AFFINITY_RULES: Dict[str, float] = {
-    "bar": 0.9,
-    "cafe": 0.85,
-    "coffee": 0.85,
-    "pub": 0.85,
-    "restaurant": 0.9,
-    "pizzeria": 0.9,
-    "gelateria": 0.9,
-    "ice_cream": 0.9,
-    "bakery": 0.8,
-    "takeaway": 0.85,
-    "fast_food": 0.8,
-    "clothes": 0.7,
-    "fashion": 0.7,
-    "beauty": 0.7,
-    "hairdresser": 0.6,
-    "gym": 0.75,
-    "fitness": 0.75,
-    "pharmacy": 0.6,
-    "optician": 0.6,
-    "supermarket": 0.7,
-    "convenience": 0.7,
-    "boutique": 0.6,
-    "professional": 0.4,
-    "lawyer": 0.3,
-    "notary": 0.3,
-    "mechanic": 0.2,
-    "car_repair": 0.2,
-}
 
 HIGH_TRAFFIC_HIGHWAYS = {"motorway", "trunk", "primary", "secondary", "tertiary"}
 
@@ -82,6 +53,7 @@ def fetch_base_rows(conn: psycopg2.extensions.connection) -> List[Mapping[str, A
           p.category,
           p.city,
           p.has_website,
+          p.has_phone,
           p.hours_weekly,
           psd.neighbor_count,
           psd.density_score,
@@ -239,22 +211,46 @@ def compute_metrics_rows(rows: Sequence[Mapping[str, Any]]) -> List[MetricsRow]:
     for row in rows:
         business_id = row["place_id"]
         has_website = bool(row.get("has_website"))
+        has_phone = bool(row.get("has_phone"))
         sector_neighbors = int(row.get("neighbor_count") or 0)
         sector_score = float(row.get("density_score") or 0.0)
 
-        size_class = resolve_size_class(row.get("size_class"), row.get("category"), row.get("is_chain"))
-        is_chain = row.get("is_chain")
-        if is_chain is None and size_class in {"media", "grande"}:
-            is_chain = True if (row.get("category") and "cooperative" in row["category"]) else None
+        existing_social = row.get("social")
+        if isinstance(existing_social, str):
+            try:
+                import json
+                existing_social = json.loads(existing_social)
+            except Exception:  # noqa: BLE001
+                existing_social = None
+        elif not isinstance(existing_social, Mapping):
+            existing_social = None
+        overrides = compute_business_facts(
+            name=row.get("name"),
+            category=row.get("category"),
+            osm_category=row.get("osm_category"),
+            osm_subtype=row.get("osm_subtype"),
+            tags=row.get("tags") if isinstance(row.get("tags"), Mapping) else None,
+            has_website=has_website or bool(row.get("website_url")),
+            has_phone=has_phone,
+            hours_weekly=row.get("hours_weekly"),
+            existing={
+                "size_class": row.get("size_class"),
+                "is_chain": row.get("is_chain"),
+                "ad_budget_band": row.get("ad_budget_band"),
+                "umbrella_affinity": row.get("umbrella_affinity"),
+                "marketing_attitude": row.get("marketing_attitude"),
+                "confidence": row.get("confidence"),
+            },
+        )
 
-        budget_band = row.get("ad_budget_band") or infer_budget_band(size_class, row.get("category"))
-        affinity = row.get("umbrella_affinity")
-        if affinity is None:
-            affinity = default_affinity(row.get("category"))
+        size_class = overrides.get("size_class")
+        is_chain = overrides.get("is_chain")
+        budget_band = overrides.get("ad_budget_band")
+        affinity = overrides.get("umbrella_affinity")
+        marketing_attitude = overrides.get("marketing_attitude")
+        facts_confidence = overrides.get("confidence")
+
         digital_presence, digital_confidence = compute_digital_presence(row, has_website)
-        marketing_attitude = row.get("marketing_attitude")
-        facts_confidence = row.get("confidence")
-
         geo_label, geo_source = compute_geo_distribution(row)
 
         metrics.append(
