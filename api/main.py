@@ -67,6 +67,10 @@ def counts():
 
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 ETL_DIR = os.path.join(ROOT_DIR, "etl")
+DEFAULT_QUERIES_FILE = os.getenv(
+    "GOOGLE_PLACES_QUERIES_FILE",
+    os.path.join(ETL_DIR, "queries", "google_places_queries.txt"),
+)
 
 RUNS = {
     "google_import": {
@@ -136,6 +140,18 @@ def _start_job(name: str, args: list[str]) -> bool:
     threading.Thread(target=worker, daemon=True).start()
     return True
 
+def _load_queries_from_file(path: str) -> list[str]:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            queries = []
+            for line in fh:
+                text = line.strip()
+                if text and not text.startswith("#"):
+                    queries.append(text)
+            return queries
+    except FileNotFoundError:
+        return []
+
 
 class GooglePlacesRequest(BaseModel):
     location: Optional[str] = None
@@ -145,6 +161,7 @@ class GooglePlacesRequest(BaseModel):
     limit: Optional[int] = Field(None, gt=0)
     sleep_seconds: Optional[float] = Field(None, ge=0.0)
     queries: List[str] = Field(default_factory=list)
+    queries_file: Optional[str] = None
 
     class Config:
         anystr_strip_whitespace = True
@@ -161,7 +178,17 @@ class GooglePlacesRequest(BaseModel):
             text = str(item).strip()
             if text:
                 cleaned.append(text)
-        values["queries"] = cleaned
+        selected_file = None
+        raw_file = values.get("queries_file")
+        if raw_file:
+            selected_file = str(raw_file).strip() or None
+            if selected_file:
+                cleaned = _load_queries_from_file(selected_file)
+        if not cleaned:
+            if selected_file is None and DEFAULT_QUERIES_FILE:
+                cleaned = _load_queries_from_file(DEFAULT_QUERIES_FILE)
+                if cleaned:
+                    selected_file = DEFAULT_QUERIES_FILE
         lat = values.get("lat")
         lng = values.get("lng")
         location = values.get("location")
@@ -171,6 +198,8 @@ class GooglePlacesRequest(BaseModel):
             raise ValueError("Provide a location or both lat/lng")
         if not cleaned:
             raise ValueError("Provide at least one query term")
+        values["queries"] = cleaned
+        values["queries_file"] = selected_file
         return values
 
     def to_args(self) -> list[str]:
@@ -185,8 +214,11 @@ class GooglePlacesRequest(BaseModel):
             args.extend(["--limit", str(self.limit)])
         if self.sleep_seconds is not None:
             args.extend(["--sleep-seconds", f"{self.sleep_seconds}"])
-        args.append("--queries")
-        args.extend(self.queries)
+        if self.queries_file:
+            args.extend(["--queries-file", self.queries_file])
+        else:
+            args.append("--queries")
+            args.extend(self.queries)
         return args
 
 

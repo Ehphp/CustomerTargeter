@@ -1,0 +1,179 @@
+# =========================
+# FOOD & BEVERAGE (ALTA AFFINITÀ)
+# =========================
+bar
+caffè
+coffee shop
+cappuccino bar
+pasticceria
+pasticceria artigianale
+bakery
+panificio
+forno
+gelateria
+ice cream shop
+pizzeria
+pizza al taglio
+ristorante
+trattoria
+osteria
+tavola calda
+fast food
+kebab
+hamburgeria
+burger restaurant
+sushi
+ristorante giapponese
+poke
+enoteca
+wine bar
+birreria
+pub
+cocktail bar
+aperitivi
+
+# =========================
+# GROCERY & FOOD RETAIL (MEDIA/ALTA)
+# =========================
+supermercato
+ipermercato
+minimarket
+convenience store
+alimentari
+macelleria
+pescheria
+salumeria
+gastronomia
+frutta e verdura
+drogheria
+caseificio
+norceria
+enogastronomia
+
+# =========================
+# MODA & RETAIL (MEDIA)
+# =========================
+negozio abbigliamento
+boutique
+clothing store
+negozio scarpe
+calzature
+sportswear
+negozio sport
+intimo
+negozio bambini
+outlet
+negozio borse
+accessori moda
+
+# =========================
+# CASA, TECH & VARI (MEDIA)
+# =========================
+elettronica
+electronics store
+telefonia
+negozio cellulari
+computer store
+elettrodomestici
+ferramenta
+bricolage
+fai da te
+casalinghi
+arredamento
+mobili
+illuminazione
+tessili per la casa
+garden center
+fioraio
+fiorista
+florist
+cartoleria
+giocattoli
+hobby shop
+edicola
+libreria
+bookstore
+ottico
+optician
+gioielleria
+orologeria
+profumeria
+erboristeria
+parafarmacia
+farmacia
+
+# =========================
+# BEAUTY & WELLNESS (ALTA)
+# =========================
+parrucchiere
+barbiere
+hair salon
+estetista
+centro estetico
+nail salon
+spa
+solarium
+massaggi
+tatuaggi
+piercing
+toelettatura cani
+pet shop
+negozio animali
+
+# =========================
+# FITNESS & TEMPO LIBERO (ALTA)
+# =========================
+palestra
+gym
+fitness center
+crossfit
+pilates
+yoga
+danza
+scuola di danza
+piscina
+centro sportivo
+campo da calcetto
+climbing gym
+arrampicata indoor
+
+# =========================
+# TURISMO & CULTURA (MEDIA/OPZIONALE)
+# =========================
+b&b
+bed and breakfast
+affittacamere
+guest house
+ostello
+hotel
+cinema
+teatro
+museo
+spazio eventi
+centro congressi
+
+# =========================
+# SERVIZI DI QUARTIERE (MEDIA/UTILI PER DENSITÀ)
+# =========================
+tabacchi
+posta privata
+copisteria
+tipografia
+lavanderia
+lavasecco
+sartoria
+calzolaio
+
+# =========================
+# CATEGORIE DA EVITARE (NON INCLUDERE)
+# =========================
+# uffici pubblici, luoghi di culto, bancomat, stazioni di servizio,
+# parcheggi, pompe funebri, car wash, tribunali, ospedali (non retail),
+# scuole/università (non retail), caserme, impianti industriali
+
+# =========================
+# NOTE
+# - Ogni riga è una "text search query" (non è un "type").
+# - Sii specifico: "pizza al taglio" rende meglio di "pizza".
+# - Mantieni IT/EN per massimizzare recall su Google Places.
+# - Personalizza il set per stagionalità (es. "gelateria" in estate).

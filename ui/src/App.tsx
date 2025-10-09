@@ -831,10 +831,6 @@ export default function App() {
       .split(/[\r\n,]/)
       .map((q) => q.trim())
       .filter((q) => q.length > 0);
-    if (queries.length === 0) {
-      alert("Inserisci almeno una query (una per riga oppure separata da virgole).");
-      return;
-    }
     const payload: {
       location?: string;
       lat?: number;
@@ -842,8 +838,12 @@ export default function App() {
       radius?: number;
       limit?: number;
       sleep_seconds?: number;
-      queries: string[];
-    } = { queries };
+      queries?: string[];
+    } = {};
+
+    if (queries.length > 0) {
+      payload.queries = queries;
+    }
 
     const locationValue = googleLocation.trim();
     if (locationValue) {
@@ -1252,6 +1252,9 @@ export default function App() {
                   value={googleQueries}
                   onChange={(e) => setGoogleQueries(e.target.value)}
                 />
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Lascia vuoto per usare il file <code>etl/queries/google_places_queries.txt</code>.
+                </p>
               </label>
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -1270,7 +1273,7 @@ export default function App() {
                 </button>
               </div>
               <p className="text-xs text-slate-500">
-                Compila una location oppure la coppia lat/lng. Le query sono obbligatorie (usa una per riga o separale con virgole).
+                Compila una location oppure la coppia lat/lng. Le query sono facoltative: senza input useremo <code>etl/queries/google_places_queries.txt</code>.
               </p>
             </div>
             <div className="border rounded-xl p-4 space-y-3">
