@@ -2,7 +2,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import os, sys, psycopg2, subprocess, threading, datetime
 from dotenv import load_dotenv
-from typing import Any
+from typing import Any, List, Optional
+from pydantic import BaseModel, Field, root_validator
 
 # Carica il .env dalla root del progetto
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
@@ -55,8 +56,6 @@ def counts():
     UNION ALL SELECT 'place_sector_density', COUNT(*) FROM place_sector_density
     UNION ALL SELECT 'business_facts', COUNT(*) FROM business_facts
     UNION ALL SELECT 'business_metrics', COUNT(*) FROM business_metrics
-    UNION ALL SELECT 'osm_business', COUNT(*) FROM osm_business
-    UNION ALL SELECT 'osm_roads', COUNT(*) FROM osm_roads
     UNION ALL SELECT 'brello_stations', COUNT(*) FROM brello_stations
     UNION ALL SELECT 'geo_zones', COUNT(*) FROM geo_zones
     """
@@ -70,7 +69,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 ETL_DIR = os.path.join(ROOT_DIR, "etl")
 
 RUNS = {
-    "overpass": {
+    "google_import": {
         "status": "idle",  # idle | running | ok | error
         "started_at": None,
         "ended_at": None,
@@ -138,11 +137,64 @@ def _start_job(name: str, args: list[str]) -> bool:
     return True
 
 
-@app.post("/etl/overpass/start")
-def etl_overpass_start():
-    args = [sys.executable, "-u", os.path.join("etl", "osm_overpass.py")]
-    if not _start_job("overpass", args):
-        raise HTTPException(status_code=409, detail="overpass already running")
+class GooglePlacesRequest(BaseModel):
+    location: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    radius: Optional[int] = Field(None, gt=0)
+    limit: Optional[int] = Field(None, gt=0)
+    sleep_seconds: Optional[float] = Field(None, ge=0.0)
+    queries: List[str] = Field(default_factory=list)
+
+    class Config:
+        anystr_strip_whitespace = True
+
+    @root_validator(pre=True)
+    def _normalize_inputs(cls, values):
+        queries = values.get("queries") or []
+        if isinstance(queries, str):
+            queries = [chunk.strip() for chunk in queries.split(",")]
+        cleaned = []
+        for item in queries:
+            if item is None:
+                continue
+            text = str(item).strip()
+            if text:
+                cleaned.append(text)
+        values["queries"] = cleaned
+        lat = values.get("lat")
+        lng = values.get("lng")
+        location = values.get("location")
+        if lat is not None and lng is None or lng is not None and lat is None:
+            raise ValueError("Specify both lat and lng or neither")
+        if (location is None or str(location).strip() == "") and lat is None:
+            raise ValueError("Provide a location or both lat/lng")
+        if not cleaned:
+            raise ValueError("Provide at least one query term")
+        return values
+
+    def to_args(self) -> list[str]:
+        args: list[str] = [sys.executable, "-u", os.path.join("etl", "google_places.py")]
+        if self.location:
+            args.extend(["--location", self.location])
+        if self.lat is not None and self.lng is not None:
+            args.extend(["--lat", f"{self.lat}", "--lng", f"{self.lng}"])
+        if self.radius is not None:
+            args.extend(["--radius", str(self.radius)])
+        if self.limit is not None:
+            args.extend(["--limit", str(self.limit)])
+        if self.sleep_seconds is not None:
+            args.extend(["--sleep-seconds", f"{self.sleep_seconds}"])
+        args.append("--queries")
+        args.extend(self.queries)
+        return args
+
+
+@app.post("/etl/google_places/start")
+def etl_google_places_start(payload: GooglePlacesRequest):
+    args = payload.to_args()
+    if not _start_job("google_import", args):
+        raise HTTPException(status_code=409, detail="google_import already running")
     return {"status": "started"}
 
 

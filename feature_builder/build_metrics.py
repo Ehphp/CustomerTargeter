@@ -15,9 +15,6 @@ from psycopg2.extras import RealDictCursor, execute_values
 logger = logging.getLogger("feature_builder")
 
 
-HIGH_TRAFFIC_HIGHWAYS = {"motorway", "trunk", "primary", "secondary", "tertiary"}
-
-
 @dataclass
 class MetricsRow:
     business_id: str
@@ -55,6 +52,7 @@ def fetch_base_rows(conn: psycopg2.extensions.connection) -> List[Mapping[str, A
           p.has_website,
           p.has_phone,
           p.hours_weekly,
+          pr.types,
           psd.neighbor_count,
           psd.density_score,
           bf.size_class,
@@ -67,9 +65,9 @@ def fetch_base_rows(conn: psycopg2.extensions.connection) -> List[Mapping[str, A
           bf.confidence,
           z.label     AS zone_label,
           z.kind      AS zone_kind,
-          st.dist     AS station_distance,
-          road.near_highway
+          st.dist     AS station_distance
         FROM places_clean p
+        JOIN places_raw pr ON pr.place_id = p.place_id
         LEFT JOIN place_sector_density psd ON psd.place_id = p.place_id
         LEFT JOIN business_facts bf ON bf.business_id = p.place_id
         LEFT JOIN LATERAL (
@@ -83,18 +81,9 @@ def fetch_base_rows(conn: psycopg2.extensions.connection) -> List[Mapping[str, A
           SELECT MIN(ST_Distance(p.location, s.geom)) AS dist
           FROM brello_stations s
         ) st ON TRUE
-        LEFT JOIN LATERAL (
-          SELECT EXISTS (
-            SELECT 1
-            FROM osm_roads r
-            WHERE r.highway = ANY(%s)
-              AND ST_DWithin(p.location, r.geom, 50)
-          ) AS near_highway
-        ) road ON TRUE
     """
-    params = (list(HIGH_TRAFFIC_HIGHWAYS),)
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(query, params)
+        cur.execute(query)
         return cur.fetchall()
 
 
@@ -158,14 +147,11 @@ def default_affinity(category: Optional[str]) -> float:
 
 def compute_geo_distribution(row: Mapping[str, Any]) -> Tuple[str, str]:
     dist = row.get("station_distance")
-    near_highway = row.get("near_highway")
     zone_label = row.get("zone_label")
     zone_kind = (row.get("zone_kind") or "").lower() if row.get("zone_kind") else ""
 
     if dist is not None and not math.isnan(dist) and dist <= 100:
         return "vicino_brello", "brello_station"
-    if near_highway:
-        return "passaggio", "road_high_traffic"
     if zone_label:
         if zone_kind in {"centro", "center", "historic"}:
             return "centro", f"geo_zone:{zone_label}"
@@ -224,12 +210,15 @@ def compute_metrics_rows(rows: Sequence[Mapping[str, Any]]) -> List[MetricsRow]:
                 existing_social = None
         elif not isinstance(existing_social, Mapping):
             existing_social = None
+        row_types = row.get("types")
+        if isinstance(row_types, (list, tuple, set)):
+            types = [str(item) for item in row_types if item]
+        else:
+            types = None
         overrides = compute_business_facts(
             name=row.get("name"),
             category=row.get("category"),
-            osm_category=row.get("osm_category"),
-            osm_subtype=row.get("osm_subtype"),
-            tags=row.get("tags") if isinstance(row.get("tags"), Mapping) else None,
+            types=types,
             has_website=has_website or bool(row.get("website_url")),
             has_phone=has_phone,
             hours_weekly=row.get("hours_weekly"),
@@ -240,6 +229,7 @@ def compute_metrics_rows(rows: Sequence[Mapping[str, Any]]) -> List[MetricsRow]:
                 "umbrella_affinity": row.get("umbrella_affinity"),
                 "marketing_attitude": row.get("marketing_attitude"),
                 "confidence": row.get("confidence"),
+                "social": existing_social,
             },
         )
 
@@ -356,3 +346,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

@@ -45,57 +45,24 @@ def _format_optional_details(business: Mapping[str, Any]) -> str:
     if isinstance(radius, (int, float)) and radius > 0:
         details.append(f"- Raggio di ricerca previsto: ~{int(radius)} metri dalle coordinate.")
 
-    osm_category = business.get("osm_category")
-    osm_subtype = business.get("osm_subtype")
-    if osm_subtype and osm_subtype != osm_category:
-        details.append(f"- Tipologia OSM: {osm_category} -> {osm_subtype}")
-    elif osm_category:
-        details.append(f"- Tipologia OSM: {osm_category}")
-
     types = business.get("types") or []
     if types:
         joined = ", ".join(str(t) for t in types if t)
         if joined:
-            details.append(f"- Tags categoria: {joined}")
+            details.append(f"- Categorie Google: {joined}")
+
+    rating = business.get("rating")
+    reviews = business.get("user_ratings_total")
+    if isinstance(rating, (int, float)):
+        if isinstance(reviews, int) and reviews > 0:
+            details.append(f"- Valutazione Google Places: {rating:.1f} su {reviews} recensioni")
+        else:
+            details.append(f"- Valutazione Google Places: {rating:.1f}")
 
     if business.get("has_website"):
         details.append("- Il dataset riporta un sito web attivo.")
     if business.get("has_phone"):
         details.append("- Il dataset riporta un recapito telefonico.")
-
-    tags = business.get("tags")
-    if isinstance(tags, dict):
-        street = tags.get("addr:street")
-        housenumber = tags.get("addr:housenumber")
-        if street or housenumber:
-            full = f"{street or ''} {housenumber or ''}".strip()
-            if full:
-                details.append(f"- Indirizzo OSM dettagliato: {full}")
-
-        locality_parts = [
-            tags.get("addr:neighbourhood"),
-            tags.get("addr:suburb"),
-            tags.get("addr:city"),
-        ]
-        locality = ", ".join(part for part in locality_parts if part)
-        if locality:
-            details.append(f"- Localita dai tag OSM: {locality}")
-
-        postcode = tags.get("addr:postcode")
-        province = tags.get("addr:province") or tags.get("addr:state")
-        region = tags.get("addr:region")
-        if postcode:
-            details.append(f"- CAP indicato: {postcode}")
-        if province:
-            details.append(f"- Provincia indicata: {province}")
-        if region:
-            details.append(f"- Regione indicata: {region}")
-        cuisine = tags.get("cuisine")
-        if cuisine:
-            details.append(f"- Cucina dichiarata: {cuisine}")
-        brand = tags.get("brand")
-        if brand:
-            details.append(f"- Brand associato: {brand}")
 
     notes = business.get("notes")
     if notes:
@@ -140,7 +107,7 @@ def build_prompt(business: Mapping[str, Any], include_schema: bool = True) -> st
     base = dedent(
         f"""
         Sei un analista marketing locale specializzato in attivita italiane di prossimita.
-        Devi arricchire le informazioni dell'attivita descritta qui sotto compilando *solo* i campi dello schema dati.
+        Devi arricchire le informazioni dell'attivita descritta qui sotto, partendo dai dati Google Places, compilando *solo* i campi dello schema dati.
 
         Attivita:
         - Nome: {name}

@@ -75,7 +75,7 @@ type JobState = {
 };
 
 type ETLStatus = {
-  overpass: JobState;
+  google_import: JobState;
   pipeline: JobState;
   auto_refresh?: JobState;
 };
@@ -89,9 +89,9 @@ const DEFAULT_SORT_DIRECTION: Record<SortColumn, SortState["direction"]> = {
   sector_density_score: "desc",
 };
 
-const JOB_KEYS = ["overpass", "pipeline", "auto_refresh"] as const;
+const JOB_KEYS = ["google_import", "pipeline", "auto_refresh"] as const;
 const JOB_LABEL: Record<typeof JOB_KEYS[number], string> = {
-  overpass: "Overpass",
+  google_import: "Google Places",
   pipeline: "Pipeline",
   auto_refresh: "Auto Refresh",
 };
@@ -167,7 +167,7 @@ function clamp01(value: number | null | undefined): number | null {
 function humanizeLabel(label: string | null | undefined): string {
   if (!label) return "-";
   const normalized = label.replace(/_/g, " ").trim();
-  if (normalized.toLowerCase() === "vicino brello") return "Vicino Brellò";
+  if (normalized.toLowerCase() === "vicino brello") return "Vicino Brello";
   if (normalized.toLowerCase() === "passaggio") return "Passaggio";
   if (normalized.toLowerCase() === "centro") return "Centro storico";
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
@@ -728,6 +728,14 @@ export default function App() {
   const [counts, setCounts] = useState<CountRow[] | null>(null);
   const [healthy, setHealthy] = useState<boolean>(false);
   const [etl, setEtl] = useState<ETLStatus | null>(null);
+  const [googleLocation, setGoogleLocation] = useState<string>("");
+  const [googleLat, setGoogleLat] = useState<string>("");
+  const [googleLng, setGoogleLng] = useState<string>("");
+  const [googleRadius, setGoogleRadius] = useState<string>("");
+  const [googleLimit, setGoogleLimit] = useState<string>("");
+  const [googleSleepSeconds, setGoogleSleepSeconds] = useState<string>("2");
+  const [googleQueries, setGoogleQueries] = useState<string>("");
+  const [googleLoading, setGoogleLoading] = useState<boolean>(false);
   const pollRef = useRef<number | null>(null);
 
   const qs = useMemo(() => {
@@ -808,7 +816,7 @@ export default function App() {
       setEtl(data);
       if (
         data.pipeline?.status === "ok" ||
-        data.overpass?.status === "ok" ||
+        data.google_import?.status === "ok" ||
         data.auto_refresh?.status === "ok"
       ) {
         fetchCounts();
@@ -818,14 +826,96 @@ export default function App() {
     }
   }
 
-  async function startOverpass() {
+  async function startGoogleImport() {
+    const queries = googleQueries
+      .split(/[\r\n,]/)
+      .map((q) => q.trim())
+      .filter((q) => q.length > 0);
+    if (queries.length === 0) {
+      alert("Inserisci almeno una query (una per riga oppure separata da virgole).");
+      return;
+    }
+    const payload: {
+      location?: string;
+      lat?: number;
+      lng?: number;
+      radius?: number;
+      limit?: number;
+      sleep_seconds?: number;
+      queries: string[];
+    } = { queries };
+
+    const locationValue = googleLocation.trim();
+    if (locationValue) {
+      payload.location = locationValue;
+    }
+
+    const latValue = googleLat.trim();
+    const lngValue = googleLng.trim();
+    if (latValue || lngValue) {
+      if (!latValue || !lngValue) {
+        alert("Specificare sia lat che lng oppure nessuno dei due.");
+        return;
+      }
+      const latNum = Number(latValue);
+      const lngNum = Number(lngValue);
+      if (!Number.isFinite(latNum) || !Number.isFinite(lngNum)) {
+        alert("Latitudine o longitudine non valide.");
+        return;
+      }
+      payload.lat = latNum;
+      payload.lng = lngNum;
+    }
+
+    if (!payload.location && payload.lat === undefined) {
+      alert("Fornisci una location oppure la coppia lat/lng.");
+      return;
+    }
+
+    const radiusValue = googleRadius.trim();
+    if (radiusValue) {
+      const radiusNum = Number(radiusValue);
+      if (!Number.isFinite(radiusNum) || radiusNum <= 0) {
+        alert("Il raggio deve essere un numero intero positivo.");
+        return;
+      }
+      payload.radius = Math.round(radiusNum);
+    }
+
+    const limitValue = googleLimit.trim();
+    if (limitValue) {
+      const limitNum = Number(limitValue);
+      if (!Number.isFinite(limitNum) || limitNum <= 0) {
+        alert("Il limite deve essere un numero intero positivo.");
+        return;
+      }
+      payload.limit = Math.round(limitNum);
+    }
+
+    const sleepValue = googleSleepSeconds.trim();
+    if (sleepValue) {
+      const sleepNum = Number(sleepValue);
+      if (!Number.isFinite(sleepNum) || sleepNum < 0) {
+        alert("Sleep seconds deve essere un numero maggiore o uguale a zero.");
+        return;
+      }
+      payload.sleep_seconds = sleepNum;
+    }
+
+    setGoogleLoading(true);
     try {
-      const r = await fetch(`${apiBase}/etl/overpass/start`, { method: "POST" });
+      const r = await fetch(`${apiBase}/etl/google_places/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
       if (!r.ok) throw new Error(await r.text());
       await fetchEtlStatus();
       startPolling();
     } catch (e) {
-      alert(`Overpass: ${String(e)}`);
+      alert(`Google Places: ${String(e)}`);
+    } finally {
+      setGoogleLoading(false);
     }
   }
 
@@ -913,8 +1003,8 @@ export default function App() {
       <div className="max-w-6xl mx-auto p-4 md:p-6 lg:p-8">
         <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6 md:mb-8">
           <div>
-            <h1 className="text-2xl font-bold">CustomerTarget · Metriche Brellò</h1>
-            <p className="text-sm text-slate-600">Esplora densità settoriale, affinità al mezzo e presenza digitale arricchite via LLM.</p>
+            <h1 className="text-2xl font-bold">CustomerTarget - Metriche Brello</h1>
+            <p className="text-sm text-slate-600">Esplora densita settoriale, affinita al mezzo e presenza digitale arricchite via LLM.</p>
           </div>
           <span className={`inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-full ${healthy ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
             <span className={`w-2 h-2 rounded-full ${healthy ? "bg-emerald-500" : "bg-rose-500"}`} />
@@ -1065,37 +1155,148 @@ export default function App() {
         </section>
 
         <section className="mb-6 md:mb-8">
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={startOverpass}
-              className="ui-btn ui-btn-ghost"
-              disabled={etl?.overpass?.status === "running"}
-              title="Esegue lo scraper Overpass"
-            >
-              Run Overpass
-            </button>
-            <button
-              onClick={startPipeline}
-              className="ui-btn ui-btn-ghost"
-              disabled={etl?.pipeline?.status === "running"}
-              title="Esegue gli step SQL della pipeline"
-            >
-              Run Pipeline
-            </button>
-            <button
-              onClick={startAutoRefresh}
-              className="ui-btn ui-btn-ghost"
-              disabled={etl?.auto_refresh?.status === "running"}
-              title="Esegue arricchimento LLM e ricalcolo metriche"
-            >
-              Run Auto Refresh
-            </button>
-            <button
-              onClick={() => fetchEtlStatus()}
-              className="ui-btn ui-btn-ghost"
-            >
-              Refresh Status
-            </button>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="border rounded-xl p-4 space-y-3 bg-slate-50">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-800">Google Places Import</h2>
+                  <p className="text-xs text-slate-600">
+                    Avvia <code className="text-xs">etl/google_places.py</code> per popolare <code className="text-xs">places_raw</code>.
+                  </p>
+                </div>
+                <span className={`text-xs px-2 py-1 rounded-full ${
+                  etl?.google_import?.status === "running" ? "bg-amber-100 text-amber-700" :
+                  etl?.google_import?.status === "ok" ? "bg-emerald-100 text-emerald-700" :
+                  etl?.google_import?.status === "error" ? "bg-rose-100 text-rose-700" :
+                  "bg-slate-100 text-slate-600"
+                }`}>
+                  {etl?.google_import?.status ?? "idle"}
+                </span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="flex flex-col text-xs font-medium text-slate-600">
+                  <span className="mb-1">Location</span>
+                  <input
+                    className="ui-input"
+                    placeholder="Es. Alatri, Italia"
+                    value={googleLocation}
+                    onChange={(e) => setGoogleLocation(e.target.value)}
+                  />
+                </label>
+                <label className="flex flex-col text-xs font-medium text-slate-600">
+                  <span className="mb-1">Radius (m)</span>
+                  <input
+                    className="ui-input"
+                    type="number"
+                    min={1}
+                    placeholder="Auto"
+                    value={googleRadius}
+                    onChange={(e) => setGoogleRadius(e.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="flex flex-col text-xs font-medium text-slate-600">
+                  <span className="mb-1">Lat</span>
+                  <input
+                    className="ui-input"
+                    type="number"
+                    step="any"
+                    placeholder="Facoltativo"
+                    value={googleLat}
+                    onChange={(e) => setGoogleLat(e.target.value)}
+                  />
+                </label>
+                <label className="flex flex-col text-xs font-medium text-slate-600">
+                  <span className="mb-1">Lng</span>
+                  <input
+                    className="ui-input"
+                    type="number"
+                    step="any"
+                    placeholder="Facoltativo"
+                    value={googleLng}
+                    onChange={(e) => setGoogleLng(e.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="flex flex-col text-xs font-medium text-slate-600">
+                  <span className="mb-1">Limit</span>
+                  <input
+                    className="ui-input"
+                    type="number"
+                    min={1}
+                    placeholder="Es. 200"
+                    value={googleLimit}
+                    onChange={(e) => setGoogleLimit(e.target.value)}
+                  />
+                </label>
+                <label className="flex flex-col text-xs font-medium text-slate-600">
+                  <span className="mb-1">Sleep seconds</span>
+                  <input
+                    className="ui-input"
+                    type="number"
+                    min={0}
+                    step="0.1"
+                    placeholder="Default 2"
+                    value={googleSleepSeconds}
+                    onChange={(e) => setGoogleSleepSeconds(e.target.value)}
+                  />
+                </label>
+              </div>
+              <label className="flex flex-col text-xs font-medium text-slate-600">
+                <span className="mb-1">Queries Google Places</span>
+                <textarea
+                  className="ui-input h-24 resize-y"
+                  placeholder="Una query per riga (es. ristorante)"
+                  value={googleQueries}
+                  onChange={(e) => setGoogleQueries(e.target.value)}
+                />
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={startGoogleImport}
+                  className="ui-btn ui-btn-primary"
+                  disabled={googleLoading || etl?.google_import?.status === "running"}
+                  title="Esegue l'import Google Places"
+                >
+                  {googleLoading ? "Running..." : "Run Google Import"}
+                </button>
+                <button
+                  onClick={() => fetchEtlStatus()}
+                  className="ui-btn ui-btn-ghost"
+                >
+                  Refresh Status
+                </button>
+              </div>
+              <p className="text-xs text-slate-500">
+                Compila una location oppure la coppia lat/lng. Le query sono obbligatorie (usa una per riga o separale con virgole).
+              </p>
+            </div>
+            <div className="border rounded-xl p-4 space-y-3">
+              <h2 className="text-sm font-semibold text-slate-800">Pipeline e automazioni</h2>
+              <p className="text-xs text-slate-600">
+                Lancia gli step SQL e il ciclo enrichment/metriche.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={startPipeline}
+                  className="ui-btn ui-btn-ghost"
+                  disabled={etl?.pipeline?.status === "running"}
+                  title="Esegue gli step SQL della pipeline"
+                >
+                  Run Pipeline
+                </button>
+                <button
+                  onClick={startAutoRefresh}
+                  className="ui-btn ui-btn-ghost"
+                  disabled={etl?.auto_refresh?.status === "running"}
+                  title="Esegue arricchimento LLM e ricalcolo metriche"
+                >
+                  Run Auto Refresh
+                </button>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -1207,7 +1408,7 @@ export default function App() {
                       onClick={() => handleSort("umbrella_affinity")}
                       className="flex items-center justify-end gap-1 hover:text-blue-600 focus:outline-none"
                     >
-                      <span>Affinità</span>
+                      <span>Affinita</span>
                       {sortIndicator("umbrella_affinity")}
                     </button>
                   </th>
@@ -1235,7 +1436,7 @@ export default function App() {
                       onClick={() => handleSort("sector_density_score")}
                       className="flex items-center justify-end gap-1 hover:text-blue-600 focus:outline-none"
                     >
-                      <span>Densità</span>
+                      <span>Densita</span>
                       {sortIndicator("sector_density_score")}
                     </button>
                   </th>

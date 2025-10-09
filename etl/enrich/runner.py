@@ -143,6 +143,8 @@ class BusinessRow:
     raw_phone: Optional[str]
     raw_website: Optional[str]
     opening_hours_json: Optional[dict[str, Any]]
+    rating: Optional[float]
+    user_ratings_total: Optional[int]
     latitude: Optional[float]
     longitude: Optional[float]
     _resolved_city: Optional[str] = field(init=False, repr=False, default=None)
@@ -150,6 +152,18 @@ class BusinessRow:
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "BusinessRow":
+        rating = row.get("rating")
+        if rating is not None:
+            try:
+                rating = float(rating)
+            except (TypeError, ValueError):
+                rating = None
+        user_ratings_total = row.get("user_ratings_total")
+        if user_ratings_total is not None:
+            try:
+                user_ratings_total = int(user_ratings_total)
+            except (TypeError, ValueError):
+                user_ratings_total = None
         return cls(
             place_id=row["place_id"],
             name=row.get("name"),
@@ -166,6 +180,8 @@ class BusinessRow:
             raw_phone=row.get("raw_phone"),
             raw_website=row.get("raw_website"),
             opening_hours_json=row.get("opening_hours_json"),
+            rating=rating,
+            user_ratings_total=user_ratings_total,
             latitude=row.get("latitude"),
             longitude=row.get("longitude"),
         )
@@ -189,6 +205,8 @@ class BusinessRow:
             "city": self.resolved_city(),
             "formatted_address": self.formatted_address,
             "types": self.types,
+            "rating": self.rating,
+            "user_ratings_total": self.user_ratings_total,
             "has_phone": self.has_phone,
             "has_website": self.has_website,
             "latitude": self.latitude,
@@ -210,6 +228,8 @@ class BusinessRow:
             self.formatted_address or "",
             self.category or "",
             json.dumps(self.types or [], ensure_ascii=False, sort_keys=True),
+            str(self.rating or ""),
+            str(self.user_ratings_total or ""),
             str(self.latitude or ""),
             str(self.longitude or ""),
             str(SEARCH_RADIUS_METERS),
@@ -227,7 +247,8 @@ class BusinessRow:
             "city": self.resolved_city(),
             "category": self.category,
             "types": self.types,
-            "tags": self.tags,
+            "rating": self.rating,
+            "user_ratings_total": self.user_ratings_total,
             "has_phone": self.has_phone,
             "has_website": self.has_website,
             "hours_weekly": self.hours_weekly,
@@ -235,8 +256,6 @@ class BusinessRow:
             "raw_phone": self.raw_phone,
             "raw_website": self.raw_website,
             "opening_hours": self.opening_hours_json,
-            "osm_category": self.osm_category,
-            "osm_subtype": self.osm_subtype,
             "latitude": self.latitude,
             "longitude": self.longitude,
             "search_radius_m": SEARCH_RADIUS_METERS,
@@ -324,6 +343,8 @@ class EnrichmentRunner:
               pr.website AS raw_website,
               pr.types,
               pr.opening_hours_json,
+              pr.rating,
+              pr.user_ratings_total,
               bf.updated_at AS facts_updated_at,
               bf.confidence AS facts_confidence,
               ST_Y(p.location::geometry) AS latitude,

@@ -13,15 +13,6 @@ CREATE TABLE places_raw (
   location GEOGRAPHY(POINT, 4326),
   source_ts TIMESTAMP DEFAULT now()
 );
-
-CREATE TABLE osm_poi (
-  osm_id TEXT PRIMARY KEY,
-  poi_type TEXT,
-  name TEXT,
-  tags JSONB,
-  location GEOGRAPHY(POINT, 4326)
-);
-
 CREATE TABLE istat_comuni (
   istat_code TEXT PRIMARY KEY,
   comune TEXT,
@@ -64,27 +55,6 @@ CREATE TABLE IF NOT EXISTS geo_zones (
   geom GEOMETRY(MULTIPOLYGON,4326) NOT NULL,
   created_at TIMESTAMP DEFAULT now()
 );
--- Attività OSM (business)
-CREATE TABLE IF NOT EXISTS osm_business (
-  osm_id TEXT PRIMARY KEY,
-  name TEXT,
-  category TEXT,               -- da tag: shop / amenity / craft ...
-  subtype TEXT,                -- es.: restaurant, bar, supermarket...
-  tags JSONB,
-  phone TEXT,
-  website TEXT,
-  opening_hours TEXT,
-  location GEOGRAPHY(POINT,4326)
-);
-
--- Strade OSM (minimo indispensabile per 'visibilità su strada')
-CREATE TABLE IF NOT EXISTS osm_roads (
-  osm_id TEXT PRIMARY KEY,
-  highway TEXT,                -- primary, secondary, residential...
-  name TEXT,
-  geom GEOGRAPHY(LINESTRING,4326)
-);
-
 CREATE TABLE IF NOT EXISTS enrichment_request (
   request_id TEXT PRIMARY KEY,
   business_id TEXT REFERENCES places_clean(place_id) ON DELETE CASCADE,
