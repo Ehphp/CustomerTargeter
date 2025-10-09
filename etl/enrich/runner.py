@@ -88,18 +88,11 @@ def _sanitize_city_candidate(part: str) -> Optional[str]:
 
 def _resolve_city(
     city: Optional[str],
-    tags: Optional[Mapping[str, Any]],
     formatted_address: Optional[str],
 ) -> Optional[str]:
     current = _normalize(city)
     if current:
         return current
-
-    if isinstance(tags, Mapping):
-        for key in ("addr:city", "addr:town", "addr:village", "addr:hamlet", "addr:municipality", "addr:suburb"):
-            value = _normalize(tags.get(key)) if tags else None
-            if value:
-                return value
 
     if formatted_address:
         parts = [p.strip() for p in formatted_address.split(",") if p.strip()]
@@ -120,7 +113,6 @@ def _resolve_city(
 def _resolve_address(
     address: Optional[str],
     formatted_address: Optional[str],
-    tags: Optional[Mapping[str, Any]],
     fallback_city: Optional[str],
 ) -> Optional[str]:
     primary = _normalize(address)
@@ -131,32 +123,7 @@ def _resolve_address(
     if formatted:
         return formatted
 
-    if not isinstance(tags, Mapping):
-        return None
-
-    street = _normalize(tags.get("addr:street") or tags.get("addr:road") or tags.get("addr:place"))
-    housenumber = _normalize(tags.get("addr:housenumber") or tags.get("addr:number"))
-    locality = (
-        _normalize(tags.get("addr:city") or tags.get("addr:town") or tags.get("addr:village") or tags.get("addr:hamlet"))
-        or fallback_city
-    )
-    postcode = _normalize(tags.get("addr:postcode"))
-
-    components: list[str] = []
-    if street and housenumber:
-        components.append(f"{street} {housenumber}")
-    elif street:
-        components.append(street)
-    elif housenumber:
-        components.append(housenumber)
-
-    if locality:
-        components.append(locality)
-    if postcode:
-        components.append(postcode)
-
-    result = ", ".join(dict.fromkeys([c for c in components if c]))
-    return result or None
+    return _normalize(fallback_city)
 
 
 @dataclass
@@ -171,9 +138,6 @@ class BusinessRow:
     has_website: bool
     hours_weekly: Optional[int]
     types: Optional[list[str]]
-    tags: Optional[dict[str, Any]]
-    osm_category: Optional[str]
-    osm_subtype: Optional[str]
     facts_updated_at: Optional[str]
     facts_confidence: Optional[float]
     raw_phone: Optional[str]
@@ -197,9 +161,6 @@ class BusinessRow:
             has_website=bool(row.get("has_website") or row.get("raw_website")),
             hours_weekly=row.get("hours_weekly"),
             types=list(row.get("types") or []),
-            tags=row.get("tags"),
-            osm_category=row.get("osm_category"),
-            osm_subtype=row.get("osm_subtype"),
             facts_updated_at=row.get("facts_updated_at"),
             facts_confidence=row.get("facts_confidence"),
             raw_phone=row.get("raw_phone"),
@@ -210,8 +171,8 @@ class BusinessRow:
         )
 
     def __post_init__(self) -> None:
-        self._resolved_city = _resolve_city(self.city, self.tags, self.formatted_address)
-        self._resolved_address = _resolve_address(self.address, self.formatted_address, self.tags, self._resolved_city)
+        self._resolved_city = _resolve_city(self.city, self.formatted_address)
+        self._resolved_address = _resolve_address(self.address, self.formatted_address, self._resolved_city)
 
     def resolved_city(self) -> Optional[str]:
         return self._resolved_city or None
@@ -228,9 +189,6 @@ class BusinessRow:
             "city": self.resolved_city(),
             "formatted_address": self.formatted_address,
             "types": self.types,
-            "tags": self.tags,
-            "osm_category": self.osm_category,
-            "osm_subtype": self.osm_subtype,
             "has_phone": self.has_phone,
             "has_website": self.has_website,
             "latitude": self.latitude,
@@ -252,7 +210,6 @@ class BusinessRow:
             self.formatted_address or "",
             self.category or "",
             json.dumps(self.types or [], ensure_ascii=False, sort_keys=True),
-            json.dumps(self.tags or {}, ensure_ascii=False, sort_keys=True),
             str(self.latitude or ""),
             str(self.longitude or ""),
             str(SEARCH_RADIUS_METERS),
@@ -367,16 +324,12 @@ class EnrichmentRunner:
               pr.website AS raw_website,
               pr.types,
               pr.opening_hours_json,
-              ob.tags,
-              ob.category AS osm_category,
-              ob.subtype AS osm_subtype,
               bf.updated_at AS facts_updated_at,
               bf.confidence AS facts_confidence,
               ST_Y(p.location::geometry) AS latitude,
               ST_X(p.location::geometry) AS longitude
             FROM places_clean p
             JOIN places_raw pr ON pr.place_id = p.place_id
-            LEFT JOIN osm_business ob ON ob.osm_id = SUBSTRING(p.place_id FROM 5)
             LEFT JOIN business_facts bf ON bf.business_id = p.place_id
             LEFT JOIN LATERAL (
               SELECT i.comune
@@ -516,9 +469,7 @@ class EnrichmentRunner:
         overrides = compute_business_facts(
             name=business.name,
             category=business.category,
-            osm_category=business.osm_category,
-            osm_subtype=business.osm_subtype,
-            tags=business.tags if isinstance(business.tags, Mapping) else None,
+            types=business.types,
             has_website=business.has_website or bool(facts_json.get("website_url")),
             has_phone=business.has_phone,
             hours_weekly=business.hours_weekly,

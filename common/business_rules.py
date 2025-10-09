@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 
-# Heuristic maps for affinity scoring by category.
 AFFINITY_RULES: Dict[str, float] = {
     "bar": 0.9,
     "cafe": 0.85,
@@ -52,43 +51,36 @@ CHAIN_KEYWORDS = {
     "ikea",
     "h&m",
     "ovs",
-    "oviesse",
     "upim",
-    "ovs",
     "foot locker",
     "unicredit",
     "intesa sanpaolo",
     "poste italiane",
 }
 
-SOCIAL_TAG_KEYS = {
-    "contact:facebook": "facebook",
-    "contact:instagram": "instagram",
-    "contact:twitter": "twitter",
-    "facebook": "facebook",
-    "instagram": "instagram",
-    "twitter": "twitter",
-    "contact:linkedin": "linkedin",
-    "linkedin": "linkedin",
-}
+
+def _normalize_token(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    token = value.strip().lower().replace("-", "_").replace(" ", "_")
+    return token or None
 
 
 def _normalize_category(*values: Optional[str]) -> Optional[str]:
     for value in values:
-        if value:
-            token = value.strip().lower().replace("-", "_").replace(" ", "_")
-            if token:
-                return token
+        token = _normalize_token(value)
+        if token:
+            return token
     return None
 
 
 def estimate_size_class(
     category: Optional[str],
-    osm_subtype: Optional[str],
-    osm_category: Optional[str],
+    types: Optional[Sequence[str]] = None,
     is_chain_hint: Optional[bool] = None,
 ) -> Optional[str]:
-    token = _normalize_category(category, osm_subtype, osm_category)
+    type_tokens = list(types or [])
+    token = _normalize_category(category, *type_tokens)
     if token is None:
         return "micro"
     if is_chain_hint:
@@ -115,7 +107,7 @@ def infer_budget_band(size_class: Optional[str], category: Optional[str]) -> Opt
         "media": "medio",
         "grande": "alto",
     }
-    base = size_map.get(size_class or "", None)
+    base = size_map.get(size_class or "")
     token = _normalize_category(category)
     if token in {"lawyer", "notary", "accountant", "dentist"}:
         return "medio" if base == "alto" else "basso"
@@ -126,8 +118,9 @@ def infer_budget_band(size_class: Optional[str], category: Optional[str]) -> Opt
     return base
 
 
-def default_affinity(category: Optional[str], osm_subtype: Optional[str] = None) -> float:
-    token = _normalize_category(category, osm_subtype)
+def default_affinity(category: Optional[str], types: Optional[Sequence[str]] = None) -> float:
+    type_tokens = list(types or [])
+    token = _normalize_category(category, *type_tokens)
     if not token:
         return 0.5
     for key, value in AFFINITY_RULES.items():
@@ -136,44 +129,25 @@ def default_affinity(category: Optional[str], osm_subtype: Optional[str] = None)
     return 0.5
 
 
-def _detect_brand(tags: Mapping[str, Any] | None, name: Optional[str]) -> bool:
-    if tags:
-        for key in ("brand", "operator", "network"):
-            value = tags.get(key)
-            if isinstance(value, str) and value.strip():
-                return True
-    if name:
-        lowered = name.lower()
-        return any(keyword in lowered for keyword in CHAIN_KEYWORDS)
-    return False
-
-
-def extract_social_from_tags(tags: Mapping[str, Any] | None) -> Dict[str, str]:
-    if not isinstance(tags, Mapping):
-        return {}
-    social: Dict[str, str] = {}
-    for key, value in tags.items():
-        if not isinstance(value, str):
-            continue
-        platform = SOCIAL_TAG_KEYS.get(key.lower())
-        if platform and value.strip():
-            social[platform] = value.strip()
-    return social
+def _detect_brand(name: Optional[str]) -> bool:
+    if not name:
+        return False
+    lowered = name.lower()
+    return any(keyword in lowered for keyword in CHAIN_KEYWORDS)
 
 
 def estimate_is_chain(
     category: Optional[str],
-    tags: Mapping[str, Any] | None,
+    types: Optional[Sequence[str]],
     name: Optional[str],
     size_class: Optional[str],
     existing_hint: Optional[bool] = None,
 ) -> Optional[bool]:
     if existing_hint is not None:
         return existing_hint
-    brand = _detect_brand(tags, name)
-    if brand:
+    if _detect_brand(name):
         return True
-    token = _normalize_category(category)
+    token = _normalize_category(category, *(types or []))
     if token in {"supermarket", "hypermarket", "shopping_centre"}:
         return True
     if size_class in {"media", "grande"} and token in {"gym", "fitness_centre", "department_store"}:
@@ -184,7 +158,6 @@ def estimate_is_chain(
 def estimate_marketing_attitude(
     has_website: bool,
     social: Mapping[str, str] | None,
-    tags: Mapping[str, Any] | None,
     hours_weekly: Optional[int],
     brand_present: bool,
 ) -> Optional[float]:
@@ -194,12 +167,6 @@ def estimate_marketing_attitude(
     social_count = len(social or {})
     if social_count:
         score += min(0.25, 0.12 * social_count)
-    if tags:
-        # contact emails or booking links indicate marketing attitude
-        for key in ("contact:email", "contact:website", "booking", "contact:whatsapp"):
-            if isinstance(tags.get(key), str) and tags[key].strip():
-                score += 0.1
-                break
     if brand_present:
         score += 0.05
     if isinstance(hours_weekly, int) and hours_weekly > 40 * 60:
@@ -233,9 +200,7 @@ def compute_business_facts(
     *,
     name: Optional[str],
     category: Optional[str],
-    osm_category: Optional[str],
-    osm_subtype: Optional[str],
-    tags: Mapping[str, Any] | None,
+    types: Optional[Sequence[str]],
     has_website: bool,
     has_phone: bool,
     hours_weekly: Optional[int],
@@ -243,21 +208,15 @@ def compute_business_facts(
 ) -> Dict[str, Any]:
     result: Dict[str, Any] = {}
 
-    brand_present = _detect_brand(tags, name)
     existing_social = existing.get("social")
-    social = existing_social if isinstance(existing_social, Mapping) else None
-    if not social:
-        derived_social = extract_social_from_tags(tags)
-        if derived_social:
-            social = derived_social
-            result["social"] = derived_social
+    social = existing_social if isinstance(existing_social, Mapping) else {}
+    brand_present = _detect_brand(name)
 
     size_class = existing.get("size_class")
-    is_chain_hint = existing.get("is_chain")
-    size_class = size_class or estimate_size_class(category, osm_subtype, osm_category, is_chain_hint)
+    size_class = size_class or estimate_size_class(category, types, existing.get("is_chain"))
     result["size_class"] = size_class
 
-    is_chain = estimate_is_chain(category, tags, name, size_class, is_chain_hint)
+    is_chain = estimate_is_chain(category, types, name, size_class, existing.get("is_chain"))
     result["is_chain"] = is_chain
 
     budget = existing.get("ad_budget_band") or infer_budget_band(size_class, category)
@@ -265,15 +224,14 @@ def compute_business_facts(
 
     affinity = existing.get("umbrella_affinity")
     if affinity is None:
-        affinity = default_affinity(category, osm_subtype)
+        affinity = default_affinity(category, types)
     result["umbrella_affinity"] = affinity
 
     marketing = existing.get("marketing_attitude")
     if marketing is None:
         marketing = estimate_marketing_attitude(
             has_website=has_website,
-            social=social,
-            tags=tags,
+            social=social if social else None,
             hours_weekly=hours_weekly,
             brand_present=brand_present,
         )
@@ -284,12 +242,14 @@ def compute_business_facts(
         confidence = estimate_confidence(
             has_website=has_website,
             has_phone=has_phone,
-            social=social,
+            social=social if social else None,
             brand_present=brand_present,
             marketing_attitude=marketing,
             size_class=size_class,
         )
     result["confidence"] = confidence
 
-    return result
+    if social:
+        result["social"] = social
 
+    return result
